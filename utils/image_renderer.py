@@ -1,5 +1,4 @@
-import json
-from typing import List, Dict, Any
+from typing import List, Dict
 from astrbot.api.star import Star
 from astrbot.api import logger
 

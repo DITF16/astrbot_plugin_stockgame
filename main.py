@@ -7,12 +7,12 @@ from typing import Dict, Any, Optional, List, Set
 import aiofiles
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core.star import StarTools
 
 # (v1.5) 导入配置管理器和新的视图渲染器
-from utils.config_manager import initialize_data_files
-from utils.image_renderer import render_market_image, render_stock_detail_image
+from .utils.config_manager import initialize_data_files
+from .utils.image_renderer import render_market_image, render_stock_detail_image
 
 # --- 常量定义 (v1.5) ---
 PLUGIN_NAME = "astrbot_plugin_stockgame"
