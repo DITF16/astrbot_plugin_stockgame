@@ -4,16 +4,17 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
-from astrbot.api.event import MessageChain
 import aiofiles
 from astrbot.api import logger, AstrBotConfig
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
+from astrbot.api.star import Context, Star, register
 from astrbot.core.star import StarTools
 
-from .config_manager import initialize_data_files
+# (v1.5) 导入配置管理器和新的视图渲染器
+from utils.config_manager import initialize_data_files
+from utils.image_renderer import render_market_image, render_stock_detail_image
 
-
+# --- 常量定义 (v1.5) ---
 PLUGIN_NAME = "astrbot_plugin_stockgame"
 DATA_DIR = StarTools.get_data_dir(PLUGIN_NAME)
 USER_DATA_DIR = DATA_DIR / "user_data"
@@ -23,154 +24,17 @@ LOCAL_EVENTS_FILE = DATA_DIR / "events_local.json"
 GAME_STATE_FILE = DATA_DIR / "game_state.json"
 PLAYING_GROUPS_FILE = DATA_DIR / "playing_groups.json"
 
-CHART_HISTORY_LENGTH = 100  # (新增) K线图最多保留 100 个数据点
+CHART_HISTORY_LENGTH = 100
 
-# --- (新增) K线图 HTML 模板 ---
-# 我们使用 ApexCharts (一个轻量级JS图表库) 来渲染K线图
-KLINE_CHART_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #ffffff;
-            color: #212529;
-            padding: 15px;
-            overflow: hidden; /* 隐藏滚动条以便截图 */
-        }
-        #chart {
-            width: 100%;
-            max-width: 600px; /* 控制图表宽度 */
-        }
-        .header {
-            margin-bottom: 10px;
-        }
-        .stock-name {
-            font-size: 24px;
-            font-weight: 600;
-        }
-        .stock-code {
-            font-size: 16px;
-            color: #6c757d;
-            margin-left: 8px;
-        }
-        .price {
-            font-size: 28px;
-            font-weight: 700;
-            color: {{ price_color }}; /* 动态颜色 */
-            margin-top: 5px;
-        }
-        .info {
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        .info strong {
-            color: #495057;
-        }
-        .tag {
-            display: inline-block;
-            background-color: #e9ecef;
-            color: #495057;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 12px;
-            margin: 2px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <span class="stock-name">{{ stock_name }}</span>
-        <span class="stock-code">【{{ stock_code }}】</span>
-        <div class="price">${{ current_price }}</div>
-    </div>
+# --- (v1.5) K线图模板已移至 image_renderer.py ---
 
-    <div id="chart"></div>
-
-    <div class="info">
-        <div><strong>所属行业:</strong> {{ stock_industry }}</div>
-        <div>
-            <strong>概念标签:</strong>
-            {% for tag in stock_tags %}
-                <span class="tag">{{ tag }}</span>
-            {% endfor %}
-        </div>
-    </div>
-
-    <script>
-        // K线图数据
-        const priceData = {{ price_data_json }};
-
-        // 生成 x 轴的标签 (例如: T-9, T-8... T-0)
-        const categories = priceData.map((_, index) => `T-${priceData.length - 1 - index}`);
-
-        var options = {
-            chart: {
-                type: 'line',
-                height: 250,
-                animations: { enabled: false }, // 禁用动画以便截图
-                toolbar: { show: false }
-            },
-            series: [{
-                name: '价格',
-                data: priceData
-            }],
-            xaxis: {
-                categories: categories,
-                labels: {
-                    show: true,
-                    // 每隔10个点显示一个标签，防止拥挤
-                    formatter: function (value, timestamp, opts) {
-                        const index = opts.seriesIndex;
-                        const total = categories.length;
-                        const lastIndex = total - 1;
-                        const interval = Math.floor(total / 10); // 动态间隔
-
-                        if (opts.dataPointIndex === 0) return '最早';
-                        if (opts.dataPointIndex === lastIndex) return '现在';
-                        if (interval > 0 && opts.dataPointIndex % interval === 0) {
-                            return value;
-                        }
-                        return '';
-                    }
-                },
-                tooltip: { enabled: false }
-            },
-            yaxis: {
-                labels: {
-                    formatter: (value) => { return `$${value.toFixed(2)}` }
-                }
-            },
-            tooltip: {
-                y: {
-                    formatter: (value) => { return `$${value.toFixed(2)}` }
-                }
-            },
-            colors: ['{{ price_color }}'], // 动态颜色
-            stroke: {
-                curve: 'smooth',
-                width: 3
-            },
-        };
-
-        var chart = new ApexCharts(document.querySelector("#chart"), options);
-        chart.render();
-    </script>
-</body>
-</html>
-"""
-
-# --- 数据结构类型提示  ---
+# --- 数据结构类型提示 (v1.4) ---
 StockData = Dict[str, Any]
 StockPrices = Dict[str, float]
 Portfolio = Dict[str, Any]
 GameEvent = Dict[str, Any]
 ActiveGameEvent = Dict[str, Any]
-PriceHistory = Dict[str, List[float]]  # (新增) K线图历史
+PriceHistory = Dict[str, List[float]]
 
 
 
@@ -190,7 +54,7 @@ class StockMarketPlugin(Star):
         self.stock_prices: StockPrices = {}
         self.active_global_events: List[ActiveGameEvent] = []
         self.playing_groups: Set[str] = set()
-        self.price_history: PriceHistory = {}  # (新增) K线图历史数据
+        self.price_history: PriceHistory = {}
 
         asyncio.create_task(self.initialize_plugin())
 
@@ -198,7 +62,7 @@ class StockMarketPlugin(Star):
         """
         (v1.4 重构) 异步初始化插件。
         """
-        logger.info(f"初始化 {PLUGIN_NAME} (v1.4 K线图版)...")
+        logger.info(f"初始化 {PLUGIN_NAME} (v1.5 视图分离版)...")
         try:
             DATA_DIR.mkdir(exist_ok=True)
             USER_DATA_DIR.mkdir(exist_ok=True)
@@ -213,21 +77,18 @@ class StockMarketPlugin(Star):
             self.global_events = await self.load_json_data(GLOBAL_EVENTS_FILE)
             self.local_events = await self.load_json_data(LOCAL_EVENTS_FILE)
 
-            # (v1.4) 加载游戏状态
             game_state = await self.load_json_data(GAME_STATE_FILE, default={})
             self.stock_prices = game_state.get("prices", {})
             self.active_global_events = game_state.get("active_global_events", [])
-            self.price_history = game_state.get("price_history", {})  # (新增) 加载历史
+            self.price_history = game_state.get("price_history", {})
 
             self.playing_groups = set(await self.load_json_data(PLAYING_GROUPS_FILE, default=[]))
 
-            # (v1.4) 初始化价格和K线图历史
             if not self.stock_prices and self.stocks_data:
                 logger.info("首次启动，初始化股票价格和K线图历史...")
                 for code, data in self.stocks_data.items():
                     initial_price = data.get("initial_price", 100.0)
                     self.stock_prices[code] = initial_price
-                    # (新增) 为K线图添加第一个数据点
                     self.price_history[code] = [initial_price]
                 await self.save_game_state()
 
@@ -310,15 +171,14 @@ class StockMarketPlugin(Star):
                         # --- (v1.4 新增) 记录K线图历史 ---
                         history_list = self.price_history.setdefault(code, [])
                         history_list.append(new_price)
-                        # (新增) 数据清理：只保留最后 CHART_HISTORY_LENGTH 个数据点
                         if len(history_list) > CHART_HISTORY_LENGTH:
                             self.price_history[code] = history_list[-CHART_HISTORY_LENGTH:]
                         # --- K线图历史记录结束 ---
 
                     self.stock_prices = new_prices
-                    await self.save_game_state()  # (v1.4) save_game_state 会保存K线图历史
+                    await self.save_game_state()
 
-                # 5. 构建并推送新闻
+                    # 5. 构建并推送新闻
                 if self.config.get("enable_news_push", True):
                     news_items = []
                     for event in expired_global_events:
@@ -377,12 +237,13 @@ class StockMarketPlugin(Star):
 
     async def push_news_to_groups(self, news: str):
         """
-        向所有已加入游戏的群组推送新闻。(无变化)
+        向所有已加入游戏的群组推送新闻。(v1.4.1 修复)
         """
         logger.info(f"推送新闻到 {len(self.playing_groups)} 个群组...")
         for group_id in self.playing_groups:
             try:
                 umo = f"aiocqhttp:group:{group_id}"
+                # (v1.4.1 修复) 使用 MessageChain().message() 来创建主动消息
                 await self.context.send_message(umo, MessageChain().message(news))
                 await asyncio.sleep(0.5)
             except Exception as e:
@@ -450,24 +311,21 @@ class StockMarketPlugin(Star):
         state = {
             "prices": self.stock_prices,
             "active_global_events": self.active_global_events,
-            "price_history": self.price_history  # (新增) 保存K线图
+            "price_history": self.price_history
         }
         await self.save_json_data(GAME_STATE_FILE, state)
 
-    # --- 指令处理 (v1.4 新增 菜单 和 详情) ---
+    # --- 指令处理 (v1.5 视图分离) ---
 
     @filter.command_group("炒股")
     def stock_group(self):
-        """
-        模拟炒股游戏指令组
-        """
+        """ 模拟炒股游戏指令组 """
         # 此处为空，AstrBot会自动处理子命令树
 
-    # --- (v1.4 新增) ---
     @stock_group.command("菜单")
     async def show_menu(self, event: AstrMessageEvent):
         """
-        显示游戏帮助菜单。
+        (v1.5) 显示游戏帮助菜单 (纯文本)。
         """
         menu = f"""--- 📈 模拟炒股 游戏菜单 📉 ---
 
@@ -478,7 +336,7 @@ class StockMarketPlugin(Star):
   - 查看当前影响市场的“全球事件”(市场气候)。
 
 /炒股 大盘
-  - 查看所有股票的当前价格和市场气候摘要。
+  - (HTML图片) 查看所有股票的当前价格和市场气候摘要。
 
 /炒股 详情 [股票代码]
   - (K线图) 查看单支股票的详细信息和历史价格曲线。
@@ -495,20 +353,13 @@ class StockMarketPlugin(Star):
   - 卖出你持有的股票。
   - 示例: /炒股 卖出 QLAI 10
 """
-        try:
-            # 菜单比较好看，用图片发送
-            img_url = await self.text_to_image(menu)
-            yield event.image_result(img_url)
-        except Exception as e:
-            logger.error(f"渲染菜单图片失败: {e}，回退到纯文本。")
-            yield event.plain_result(menu)
+        # (v1.5) 按要求取消T2I，改为纯文本
+        yield event.plain_result(menu)
 
     @stock_group.command("开户")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def join_game(self, event: AstrMessageEvent):
-        """
-        加入模拟炒股游戏。
-        """
+        """ 加入模拟炒股游戏。 (无变化) """
         user_name = event.get_sender_name()
         portfolio = await self.get_user_portfolio(event)
 
@@ -530,7 +381,7 @@ class StockMarketPlugin(Star):
     @stock_group.command("市场新闻")
     async def get_news(self, event: AstrMessageEvent):
         """
-        查看当前 *所有* 活跃的市场气候 (全球事件)。
+        (v1.5) 查看当前 *所有* 活跃的市场气候 (纯文本)。
         """
         report = "--- 📰 市场气候报告 📰 ---\n\n"
         if not self.active_global_events:
@@ -545,74 +396,79 @@ class StockMarketPlugin(Star):
         report += "------------------------\n"
         report += "提示：局部突发事件不会在此显示，会即时推送。"
 
-        try:
-            img_url = await self.text_to_image(report)
-            yield event.image_result(img_url)
-        except Exception as e:
-            yield event.plain_result(report)
+        # (v1.5) 按要求取消T2I，改为纯文本
+        yield event.plain_result(report)
 
     @stock_group.command("大盘")
     async def view_market(self, event: AstrMessageEvent):
         """
-        查看当前所有股票的价格，并附带市场气候。
+        (v1.5 重构) 使用 HTML 渲染器查看大盘。
         """
         if not self.stock_prices:
             yield event.plain_result("股市尚未开盘，请联系管理员检查插件。")
             return
 
+        stocks_to_render = []
         async with self.game_lock:
-            market_report = "--- 📈 模拟股市大盘 📉 ---\n\n"
-
-            market_report += "【当前市场气候】\n"
-            if not self.active_global_events:
-                market_report += "  风平浪静，请关注突发事件。\n"
-            else:
-                for e in self.active_global_events:
-                    impact_str = "📈" if e.get("trend_impact", 0) > 0 else "📉"
-                    market_report += f"  {impact_str} {e['content'][:20]}...\n"
-            market_report += f"  (使用 /炒股 市场新闻 查看详情)\n"
-            market_report += "------------------------\n\n"
-
             for code, price in self.stock_prices.items():
-                stock_info = self.stocks_data.get(code)
-                if stock_info:
-                    name = stock_info.get('name', '???')
-                    market_report += f"【{code}】{name}: ${price:.2f}\n"
+                stock_info = self.stocks_data.get(code, {})
+                history = self.price_history.get(code, [])
 
-            market_report += "\n------------------------\n"
-            market_report += f"使用 /炒股 详情 [代码] 查看K线图"
+                change_str = "N/A"
+                color_class = "color-gray"  # 默认灰色
 
-            try:
-                img_url = await self.text_to_image(market_report)
-                yield event.image_result(img_url)
-            except Exception as e:
-                yield event.plain_result(market_report)
+                if len(history) >= 2:
+                    prev_price = history[-2]
+                    change = price - prev_price
+                    change_percent = (change / prev_price) * 100 if prev_price != 0 else 0
 
-    # --- (v1.4 新增) ---
+                    if change > 0:
+                        change_str = f"↑ {change_percent:+.2f}%"
+                        color_class = "color-green"  # 涨
+                    elif change < 0:
+                        change_str = f"↓ {change_percent:+.2f}%"
+                        color_class = "color-red"  # 跌
+                    else:
+                        change_str = "— 0.00%"
+
+                stocks_to_render.append({
+                    "code": code,
+                    "name": stock_info.get('name', '???'),
+                    "price": price,
+                    "change_str": change_str,
+                    "color_class": color_class
+                })
+
+        try:
+            # (v1.5) 调用新的渲染器
+            img_url = await render_market_image(self, self.active_global_events, stocks_to_render)
+            yield event.image_result(img_url)
+        except Exception as e:
+            logger.error(f"渲染大盘图片失败: {e}，回退到纯文本。")
+            yield event.plain_result("渲染大盘图片失败，请检查后台日志。")
+
     @stock_group.command("详情")
     async def view_stock_detail(self, event: AstrMessageEvent, code: str):
         """
-        (K线图) 查看单支股票的详细信息和历史价格曲线。
+        (v1.5 重构) 使用 HTML 渲染器查看K线图。
         """
         code = code.upper()
 
         async with self.game_lock:
-            # 1. 获取股票基础信息
             stock_info = self.stocks_data.get(code)
             if not stock_info:
                 yield event.plain_result(f"错误：未找到股票代码 {code}。")
                 return
 
-            # 2. 获取当前价格
             current_price = self.stock_prices.get(code, 0.0)
-
-            # 3. 获取历史价格
             price_history = self.price_history.get(code, [])
 
-            # 4. 准备渲染数据
-            price_color = "#28a745"  # 默认涨 (绿色)
-            if len(price_history) >= 2 and price_history[-1] < price_history[-2]:
-                price_color = "#dc3545"  # 跌 (红色)
+            price_color = "color-gray"
+            if len(price_history) >= 2:
+                if price_history[-1] > price_history[-2]:
+                    price_color = "#28a745"  # 涨 (绿色)
+                elif price_history[-1] < price_history[-2]:
+                    price_color = "#dc3545"  # 跌 (红色)
 
             render_data = {
                 "stock_name": stock_info.get("name", "未知"),
@@ -620,13 +476,13 @@ class StockMarketPlugin(Star):
                 "current_price": f"{current_price:.2f}",
                 "stock_industry": stock_info.get("industry", "未知"),
                 "stock_tags": stock_info.get("tags", []),
-                "price_data_json": json.dumps(price_history),  # 将列表转为JS数组
+                "price_data_json": json.dumps(price_history),
                 "price_color": price_color
             }
 
         try:
-            # 5. 调用 HTML 渲染器
-            img_url = await self.html_render(KLINE_CHART_TEMPLATE, render_data, options={"timeout": 10000})
+            # (v1.5) 调用新的渲染器
+            img_url = await render_stock_detail_image(self, render_data)
             yield event.image_result(img_url)
         except Exception as e:
             logger.error(f"渲染K线图 {code} 失败: {e}", exc_info=True)
@@ -635,7 +491,7 @@ class StockMarketPlugin(Star):
     @stock_group.command("我的资产")
     async def view_portfolio(self, event: AstrMessageEvent):
         """
-        查看自己的资产和持仓。
+        (v1.5) 查看自己的资产和持仓 (纯文本)。
         """
         user_name = event.get_sender_name()
         portfolio = await self.get_user_portfolio(event)
@@ -649,8 +505,8 @@ class StockMarketPlugin(Star):
             holdings = portfolio.get("stocks", {})
 
             report = f"--- @{user_name} 的资产报告 ---\n"
-            report += f"💰 **可用现金:** ${cash:.2f}\n\n"
-            report += "📊 **持仓详情:**\n"
+            report += f"💰 可用现金: ${cash:.2f}\n\n"
+            report += "📊 持仓详情:\n"
 
             total_stock_value = 0.0
             if not holdings:
@@ -667,19 +523,14 @@ class StockMarketPlugin(Star):
 
             total_assets = cash + total_stock_value
             report += "\n------------------------\n"
-            report += f"💳 **总资产 (现金+市值):** ${total_assets:.2f}"
+            report += f"💳 总资产 (现金+市值): ${total_assets:.2f}"
 
-            try:
-                img_url = await self.text_to_image(report)
-                yield event.image_result(img_url)
-            except Exception as e:
-                yield event.plain_result(report)
+            # (v1.5) 按要求取消T2I，改为纯文本
+            yield event.plain_result(report)
 
     @stock_group.command("买入")
     async def buy_stock(self, event: AstrMessageEvent, code: str, amount_str: str):
-        """
-        购买股票。
-        """
+        """ 购买股票。 (无变化) """
         user_name = event.get_sender_name()
         portfolio = await self.get_user_portfolio(event)
 
@@ -727,9 +578,7 @@ class StockMarketPlugin(Star):
 
     @stock_group.command("卖出")
     async def sell_stock(self, event: AstrMessageEvent, code: str, amount_str: str):
-        """
-        卖出股票。
-        """
+        """ 卖出股票。 (无变化) """
         user_name = event.get_sender_name()
         portfolio = await self.get_user_portfolio(event)
 
