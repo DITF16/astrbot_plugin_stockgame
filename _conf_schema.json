@@ -1,0 +1,34 @@
+{
+  "tick_interval": {
+    "description": "股市刷新间隔（秒）",
+    "type": "int",
+    "default": 300,
+    "hint": "游戏的核心时钟。5分钟(300秒)是一个比较均衡的设置。"
+  },
+  "starting_cash": {
+    "description": "玩家初始资金",
+    "type": "int",
+    "default": 10000
+  },
+  "global_event_chance": {
+    "description": "每次刷新时，发生 *新* 全球事件的概率 (0.0 - 1.0)",
+    "type": "float",
+    "default": 0.10,
+    "hint": "这个概率建议调低，因为全球事件会持续很久。"
+  },
+  "local_event_chance": {
+    "description": "每次刷新时，发生 *突发* 局部事件的概率 (0.0 - 1.0)",
+    "type": "float",
+    "default": 0.15
+  },
+  "base_volatility": {
+    "description": "股价基础波动率 (例如 0.03 代表 ±3%)",
+    "type": "float",
+    "default": 0.03
+  },
+  "enable_news_push": {
+    "description": "是否在 *新* 事件发生或 *旧* 事件过期时主动推送新闻",
+    "type": "bool",
+    "default": true
+  }
+}
