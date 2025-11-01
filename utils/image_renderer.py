@@ -3,19 +3,16 @@ from astrbot.api.star import Star
 from astrbot.api import logger
 from pathlib import Path
 
-# --- (v1.9 本地化) 加载本地 ApexCharts JS ---
 APEXCHARTS_JS_CODE = ""
 try:
-    # JS_FILE_PATH 会自动定位到当前 .py 文件所在的目录
     JS_FILE_PATH = Path(__file__).parent / "apexcharts.min.js"
     with open(JS_FILE_PATH, 'r', encoding='utf-8') as f:
         APEXCHARTS_JS_CODE = f.read()
     logger.info("本地 apexcharts.min.js 加载成功。")
 except Exception as e:
     logger.error(f"加载本地 apexcharts.min.js 失败: {e}。K线图将无法渲染！")
-# --- 结束 ---
 
-# --- (v1.6.0: 颜色反转) ---
+
 MARKET_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -41,8 +38,8 @@ MARKET_HTML_TEMPLATE = """
             padding: 5px 0;
             border-bottom: 1px solid #f0f0f0;
         }
-        .climate-item .impact-good { color: #dc3545; font-weight: 600; } /* (v1.6) 利好改红色 */
-        .climate-item .impact-bad { color: #28a745; font-weight: 600; } /* (v1.6) 利空改绿色 */
+        .climate-item .impact-good { color: #dc3545; font-weight: 600; }
+        .climate-item .impact-bad { color: #28a745; font-weight: 600; }
         .climate-item .duration { font-size: 12px; color: #6c757d; }
         .climate-empty { font-size: 14px; color: #6c757d; }
 
@@ -65,8 +62,8 @@ MARKET_HTML_TEMPLATE = """
             margin-top: 5px;
         }
         .stock-card .change { font-size: 14px; font-weight: 500; }
-        .color-red { color: #dc3545; }   /* (v1.6) 红色 (涨) */
-        .color-green { color: #28a745; } /* (v1.6) 绿色 (跌) */
+        .color-red { color: #dc3545; }
+        .color-green { color: #28a745; }
         .color-gray { color: #6c757d; }
 
     </style>
@@ -109,7 +106,7 @@ MARKET_HTML_TEMPLATE = """
 </html>
 """
 
-# --- (迁移) K线图 HTML 模板 ---
+
 KLINE_CHART_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -183,7 +180,7 @@ KLINE_CHART_TEMPLATE = """
             },
             yaxis: { labels: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
             tooltip: { y: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
-            colors: ['{{ price_color }}'], /* (v1.6) 颜色由 main.py 传入 (红或绿) */
+            colors: ['{{ price_color }}'], /* 颜色由 main.py 传入 (红或绿) */
             stroke: { curve: 'smooth', width: 3 },
         };
         var chart = new ApexCharts(document.querySelector("#chart"), options);
@@ -196,7 +193,7 @@ KLINE_CHART_TEMPLATE = """
 
 async def render_market_image(star_instance: Star, climate_events: List[Dict], stocks_to_render: List[Dict]) -> str:
     """
-    (新增) 使用 html_render 渲染漂亮的大盘图片
+    使用 html_render 渲染漂亮的大盘图片
     """
     render_data = {
         "climate_events": climate_events,
@@ -220,9 +217,7 @@ async def render_stock_detail_image(star_instance: Star, render_data: Dict) -> s
     (迁移) 使用 html_render 渲染K线图
     """
     try:
-        # --- (v1.9 本地化) 注入本地JS代码 ---
         render_data["apexcharts_js"] = APEXCHARTS_JS_CODE
-        # --- 结束 ---
 
         img_url = await star_instance.html_render(
             KLINE_CHART_TEMPLATE,
@@ -232,4 +227,4 @@ async def render_stock_detail_image(star_instance: Star, render_data: Dict) -> s
         return img_url
     except Exception as e:
         logger.error(f"渲染K线图HTML {render_data.get('stock_code')} 失败: {e}", exc_info=True)
-        raise  # 抛出异常，让主逻辑去处理
+        raise

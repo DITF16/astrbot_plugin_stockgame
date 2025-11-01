@@ -11,13 +11,13 @@
     "default": 10000
   },
   "global_event_chance": {
-    "description": "每次刷新时，发生 *新* 全球事件的概率 (0.0 - 1.0)",
+    "description": "每次刷新时，发生新全球事件的概率 (0.0 - 1.0)",
     "type": "float",
     "default": 0.10,
     "hint": "这个概率建议调低，因为全球事件会持续很久。"
   },
   "local_event_chance": {
-    "description": "每次刷新时，发生 *突发* 局部事件的概率 (0.0 - 1.0)",
+    "description": "每次刷新时，发生局部事件的概率 (0.0 - 1.0)",
     "type": "float",
     "default": 0.15
   },
@@ -25,10 +25,10 @@
     "description": "股价基础波动率 (例如 0.02 代表 ±2%)",
     "type": "float",
     "default": 0.02,
-    "hint": "(v1.7) 已调低基础波动，使事件驱动更明显"
+    "hint": "已调低基础波动，使事件驱动更明显"
   },
   "enable_news_push": {
-    "description": "是否在 *新* 事件发生或 *旧* 事件过期时主动推送新闻",
+    "description": "是否在新事件发生或旧事件过期时主动推送新闻",
     "type": "bool",
     "default": true
   }

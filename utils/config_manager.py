@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Any
 from astrbot.api import logger
 
-# --- 默认股票数据 (v1.6.0: 行业中文化) ---
-# (这个股票列表保持不变)
 DEFAULT_STOCKS = {
     "GPHM": {"name": "创世纪药业", "industry": "医疗生物", "tags": ["新药研发", "专利", "慢性病"], "initial_price": 100},
     "VTAL": {"name": "维生系统", "industry": "医疗生物", "tags": ["医疗器械", "AI诊断", "智能假肢"], "initial_price": 80},
@@ -29,7 +27,7 @@ DEFAULT_STOCKS = {
     "FLOG": {"name": "闪电物流", "industry": "消费娱乐", "tags": ["电商", "物流", "仓储"], "initial_price": 75}
 }
 
-# --- (v1.8.0) 默认全球事件 (扩充至10个，覆盖5大行业) ---
+# --- 默认全球事件 (扩充至10个，覆盖5大行业) ---
 DEFAULT_GLOBAL_EVENTS = [
     # 医疗生物
     {
@@ -108,7 +106,7 @@ DEFAULT_GLOBAL_EVENTS = [
     }
 ]
 
-# --- (v1.8.0) 默认局部事件 (扩充至40个，全面平衡) ---
+# --- 默认局部事件 (扩充至40个，全面平衡) ---
 DEFAULT_LOCAL_EVENTS = [
     # 医疗生物 (8)
     {
@@ -277,7 +275,7 @@ DEFAULT_LOCAL_EVENTS = [
     }
 ]
 
-# --- (v1.6.0) 自动创建文件的函数 ---
+# --- 自动创建文件的函数 ---
 
 async def _create_file_if_not_exists(file_path: Path, default_data: Any):
     if file_path.exists():
