@@ -36,7 +36,6 @@ ActiveGameEvent = Dict[str, Any]
 PriceHistory = Dict[str, List[float]]
 
 
-@register(PLUGIN_NAME, "DITF16", "模拟炒股游戏插件", "1.6.0", "https://github.com/DITF16/astrbot_plugin_stockgame")
 class StockMarketPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
