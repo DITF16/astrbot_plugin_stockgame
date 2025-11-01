@@ -1,6 +1,19 @@
 from typing import List, Dict
 from astrbot.api.star import Star
 from astrbot.api import logger
+from pathlib import Path
+
+# --- (v1.9 本地化) 加载本地 ApexCharts JS ---
+APEXCHARTS_JS_CODE = ""
+try:
+    # JS_FILE_PATH 会自动定位到当前 .py 文件所在的目录
+    JS_FILE_PATH = Path(__file__).parent / "apexcharts.min.js"
+    with open(JS_FILE_PATH, 'r', encoding='utf-8') as f:
+        APEXCHARTS_JS_CODE = f.read()
+    logger.info("本地 apexcharts.min.js 加载成功。")
+except Exception as e:
+    logger.error(f"加载本地 apexcharts.min.js 失败: {e}。K线图将无法渲染！")
+# --- 结束 ---
 
 # --- (v1.6.0: 颜色反转) ---
 MARKET_HTML_TEMPLATE = """
@@ -103,7 +116,7 @@ KLINE_CHART_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script>{{ apexcharts_js | safe }}</script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -207,6 +220,10 @@ async def render_stock_detail_image(star_instance: Star, render_data: Dict) -> s
     (迁移) 使用 html_render 渲染K线图
     """
     try:
+        # --- (v1.9 本地化) 注入本地JS代码 ---
+        render_data["apexcharts_js"] = APEXCHARTS_JS_CODE
+        # --- 结束 ---
+
         img_url = await star_instance.html_render(
             KLINE_CHART_TEMPLATE,
             render_data,
