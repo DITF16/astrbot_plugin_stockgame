@@ -149,16 +149,16 @@ KLINE_CHART_TEMPLATE = """
     </div>
     <div id="chart"></div>
     <div class="info">
-        <div><strong>所属行业:</strong> {{ stock_industry }}</div>
+        <div><strong>所属行业:</strong> {{ industry }}</div>
         <div>
             <strong>概念标签:</strong>
-            {% for tag in stock_tags %}
+            {% for tag in tags %}
                 <span class="tag">{{ tag }}</span>
             {% endfor %}
         </div>
     </div>
     <script>
-        const priceData = {{ price_data_json }};
+        const priceData = {{ price_data_json | safe }};
         const categories = priceData.map((_, index) => `T-${priceData.length - 1 - index}`);
         var options = {
             chart: { type: 'line', height: 250, animations: { enabled: false }, toolbar: { show: false } },
@@ -204,7 +204,7 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
-            options={"timeout": 10000}
+            options={"timeout": 10000, "execute_js": True}
         )
         return img_url
     except Exception as e:
