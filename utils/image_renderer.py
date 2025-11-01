@@ -222,7 +222,7 @@ async def render_stock_detail_image(star_instance: Star, render_data: Dict) -> s
         img_url = await star_instance.html_render(
             KLINE_CHART_TEMPLATE,
             render_data,
-            options={"timeout": 10000}
+            options={"timeout": 10000, "execute_js": True}
         )
         return img_url
     except Exception as e:
