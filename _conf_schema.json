@@ -22,9 +22,10 @@
     "default": 0.15
   },
   "base_volatility": {
-    "description": "股价基础波动率 (例如 0.03 代表 ±3%)",
+    "description": "股价基础波动率 (例如 0.02 代表 ±2%)",
     "type": "float",
-    "default": 0.03
+    "default": 0.02,
+    "hint": "(v1.7) 已调低基础波动，使事件驱动更明显"
   },
   "enable_news_push": {
     "description": "是否在 *新* 事件发生或 *旧* 事件过期时主动推送新闻",

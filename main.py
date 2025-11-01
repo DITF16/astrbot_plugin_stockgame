@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List, Set
 import aiofiles
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core.star import StarTools
 
 # (v1.5.1 修复) 使用相对导入
@@ -528,7 +528,7 @@ class StockMarketPlugin(Star):
     @stock_group.command("详情")
     async def view_stock_detail(self, event: AstrMessageEvent, code: str):
         """
-        (v1.6) 查看K线图 (修复K线图Bug, 红涨绿跌)。
+        (v1.8.1 修复) 修复K线图Bug, 红涨绿跌。
         """
         code = code.upper()
 
@@ -541,11 +541,13 @@ class StockMarketPlugin(Star):
             current_price = self.stock_prices.get(code, 0.0)
             price_history = self.price_history.get(code, [])
 
-            # (v1.6 Bug修复) 检查历史数据点
+            # --- (v1.8.1 Bug 修复) ---
+            # 检查历史数据点是否足够（必须 >= 2）
             if len(price_history) < 2:
                 yield event.plain_result(
                     f"【{code}】历史数据不足 (仅 {len(price_history)} 个数据点)，暂无法绘制K线图。请等待下一次市场刷新。")
                 return
+            # --- 修复结束 ---
 
             # (v1.6) 红涨绿跌 逻辑修改
             price_color = "#6c757d"  # 默认灰色
@@ -558,7 +560,6 @@ class StockMarketPlugin(Star):
                 "stock_name": stock_info.get("name", "未知"),
                 "stock_code": code,
                 "current_price": f"{current_price:.2f}",
-                # (v1.6) 确保行业是中文
                 "stock_industry": stock_info.get("industry", "未知"),
                 "stock_tags": stock_info.get("tags", []),
                 "price_data_json": json.dumps(price_history),
@@ -566,6 +567,7 @@ class StockMarketPlugin(Star):
             }
 
         try:
+            # (v1.5) 调用新的渲染器
             img_url = await render_stock_detail_image(self, render_data)
             yield event.image_result(img_url)
         except Exception as e:
