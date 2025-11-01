@@ -161,8 +161,8 @@ KLINE_CHART_TEMPLATE = """
                         const total = categories.length;
                         if (opts.dataPointIndex === 0) return '最早';
                         if (opts.dataPointIndex === total - 1) return '现在';
-                        const interval = Math.floor(total / 10);
-                        if (interval > 0 && opts.dataPointIndex % interval === 0) { return value; }
+                        const interval = Math.ceil(total / 10);
+                        if (interval > 1 && opts.dataPointIndex % interval === 0) { return value; }
                         return '';
                     }
                 },
