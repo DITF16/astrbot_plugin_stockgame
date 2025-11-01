@@ -4,13 +4,14 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
+
 import aiofiles
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, register
 from astrbot.core.star import StarTools
 
-# (v1.5) 导入配置管理器和新的视图渲染器
+# (v1.5.1 修复) 使用相对导入
 from .utils.config_manager import initialize_data_files
 from .utils.image_renderer import render_market_image, render_stock_detail_image
 
@@ -26,9 +27,7 @@ PLAYING_GROUPS_FILE = DATA_DIR / "playing_groups.json"
 
 CHART_HISTORY_LENGTH = 100
 
-# --- (v1.5) K线图模板已移至 image_renderer.py ---
-
-# --- 数据结构类型提示 (v1.4) ---
+# --- 数据结构类型提示 (v1.6) ---
 StockData = Dict[str, Any]
 StockPrices = Dict[str, float]
 Portfolio = Dict[str, Any]
@@ -37,7 +36,7 @@ ActiveGameEvent = Dict[str, Any]
 PriceHistory = Dict[str, List[float]]
 
 
-
+@register(PLUGIN_NAME, "DITF16", "模拟炒股游戏插件", "1.6.0", "https://github.com/DITF16/astrbot_plugin_stockgame")
 class StockMarketPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -55,14 +54,15 @@ class StockMarketPlugin(Star):
         self.active_global_events: List[ActiveGameEvent] = []
         self.playing_groups: Set[str] = set()
         self.price_history: PriceHistory = {}
+        self.last_local_event_news: str = "暂无突发事件。"  # (v1.6 新增)
 
         asyncio.create_task(self.initialize_plugin())
 
     async def initialize_plugin(self):
         """
-        (v1.4 重构) 异步初始化插件。
+        (v1.6 重构) 异步初始化插件。
         """
-        logger.info(f"初始化 {PLUGIN_NAME} (v1.5 视图分离版)...")
+        logger.info(f"初始化 {PLUGIN_NAME} (v1.6.0 交互重构版)...")
         try:
             DATA_DIR.mkdir(exist_ok=True)
             USER_DATA_DIR.mkdir(exist_ok=True)
@@ -77,13 +77,17 @@ class StockMarketPlugin(Star):
             self.global_events = await self.load_json_data(GLOBAL_EVENTS_FILE)
             self.local_events = await self.load_json_data(LOCAL_EVENTS_FILE)
 
+            # (v1.6) 加载游戏状态
             game_state = await self.load_json_data(GAME_STATE_FILE, default={})
             self.stock_prices = game_state.get("prices", {})
             self.active_global_events = game_state.get("active_global_events", [])
             self.price_history = game_state.get("price_history", {})
+            # (v1.6) 加载最新突发新闻
+            self.last_local_event_news = game_state.get("last_local_event_news", "暂无突发事件。")
 
             self.playing_groups = set(await self.load_json_data(PLAYING_GROUPS_FILE, default=[]))
 
+            # (v1.4) 初始化价格和K线图历史
             if not self.stock_prices and self.stocks_data:
                 logger.info("首次启动，初始化股票价格和K线图历史...")
                 for code, data in self.stocks_data.items():
@@ -112,11 +116,11 @@ class StockMarketPlugin(Star):
         await self.save_game_state()
         logger.info(f"{PLUGIN_NAME} 已卸载。")
 
-    # --- 核心游戏循环 (v1.4 重构) ---
+    # --- 核心游戏循环 (v1.6 重构) ---
 
     async def market_ticker(self):
         """
-        游戏的主循环，定时更新股市。(v1.4: 增加K线图历史记录)
+        (v1.6) 游戏主循环，增加突发新闻存储
         """
         tick_interval = self.config.get("tick_interval", 300)
         await asyncio.sleep(5)
@@ -129,6 +133,7 @@ class StockMarketPlugin(Star):
                 triggered_local_event: Optional[GameEvent] = None
                 triggered_new_global_events: List[GameEvent] = []
                 expired_global_events: List[ActiveGameEvent] = []
+                local_news = ""  # (v1.6)
 
                 # 1. 更新并过滤已激活的全球事件
                 next_active_global_events = []
@@ -154,6 +159,9 @@ class StockMarketPlugin(Star):
                 # 3. 判定是否触发 *突发* 局部事件
                 if self.local_events and random.random() < self.config.get("local_event_chance", 0.15):
                     triggered_local_event = random.choice(self.local_events)
+                    # (v1.6) 存储突发新闻
+                    local_news = f"【突发】🔥 {triggered_local_event['content']}"
+                    self.last_local_event_news = local_news
 
                 # 4. 价格计算
                 async with self.game_lock:
@@ -168,25 +176,23 @@ class StockMarketPlugin(Star):
                         )
                         new_prices[code] = new_price
 
-                        # --- (v1.4 新增) 记录K线图历史 ---
                         history_list = self.price_history.setdefault(code, [])
                         history_list.append(new_price)
                         if len(history_list) > CHART_HISTORY_LENGTH:
                             self.price_history[code] = history_list[-CHART_HISTORY_LENGTH:]
-                        # --- K线图历史记录结束 ---
 
                     self.stock_prices = new_prices
-                    await self.save_game_state()
+                    await self.save_game_state()  # (v1.6) 此时会保存K线图和最新突发新闻
 
-                    # 5. 构建并推送新闻
+                # 5. 构建并推送新闻
                 if self.config.get("enable_news_push", True):
                     news_items = []
                     for event in expired_global_events:
                         news_items.append(f"【过期】📉 {event['content']}")
                     for event in triggered_new_global_events:
                         news_items.append(f"【全球】📈 {event['content']} (持续 {event['duration_ticks']} 轮)")
-                    if triggered_local_event:
-                        news_items.append(f"【突发】🔥 {triggered_local_event['content']}")
+                    if local_news:  # (v1.6) 使用 local_news 变量
+                        news_items.append(local_news)
 
                     if news_items:
                         full_news = "📰 【股市快讯】 📰\n" + "\n".join(news_items)
@@ -239,17 +245,17 @@ class StockMarketPlugin(Star):
         """
         向所有已加入游戏的群组推送新闻。(v1.4.1 修复)
         """
+        # (v1.6) self.playing_groups 现在由 /炒股 开启推送 管理
         logger.info(f"推送新闻到 {len(self.playing_groups)} 个群组...")
         for group_id in self.playing_groups:
             try:
                 umo = f"aiocqhttp:group:{group_id}"
-                # (v1.4.1 修复) 使用 MessageChain().message() 来创建主动消息
                 await self.context.send_message(umo, MessageChain().message(news))
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.warning(f"推送新闻到群 {group_id} 失败: {e}")
 
-    # --- 数据持久化 辅助函数 (v1.4 重构) ---
+    # --- 数据持久化 辅助函数 (v1.6 重构) ---
 
     async def load_json_data(self, file_path: Path, default: Any = None) -> Any:
         try:
@@ -298,24 +304,33 @@ class StockMarketPlugin(Star):
         file_path = USER_DATA_DIR / f"{group_id}_{user_id}.json"
         await self.save_json_data(file_path, portfolio)
 
-    async def register_group(self, group_id: str):
+    # (v1.6) register_group 更名为 enable_push_in_group
+    async def enable_push_in_group(self, group_id: str):
         if group_id and group_id not in self.playing_groups:
             self.playing_groups.add(group_id)
             await self.save_json_data(PLAYING_GROUPS_FILE, list(self.playing_groups))
-            logger.info(f"群组 {group_id} 已加入游戏，将接收新闻推送。")
+            logger.info(f"群组 {group_id} 已开启新闻推送。")
+
+    # (v1.6 新增)
+    async def disable_push_in_group(self, group_id: str):
+        if group_id and group_id in self.playing_groups:
+            self.playing_groups.remove(group_id)
+            await self.save_json_data(PLAYING_GROUPS_FILE, list(self.playing_groups))
+            logger.info(f"群组 {group_id} 已关闭新闻推送。")
 
     async def save_game_state(self):
         """
-        (v1.4) 保存游戏状态 (价格、活跃事件、K线图历史)。
+        (v1.6) 保存游戏状态 (价格、活跃事件、K线图、最新突发)。
         """
         state = {
             "prices": self.stock_prices,
             "active_global_events": self.active_global_events,
-            "price_history": self.price_history
+            "price_history": self.price_history,
+            "last_local_event_news": self.last_local_event_news  # (v1.6)
         }
         await self.save_json_data(GAME_STATE_FILE, state)
 
-    # --- 指令处理 (v1.5 视图分离) ---
+    # --- 指令处理 (v1.6 交互重构) ---
 
     @filter.command_group("炒股")
     def stock_group(self):
@@ -325,18 +340,29 @@ class StockMarketPlugin(Star):
     @stock_group.command("菜单")
     async def show_menu(self, event: AstrMessageEvent):
         """
-        (v1.5) 显示游戏帮助菜单 (纯文本)。
+        (v1.6) 显示游戏帮助菜单 (纯文本)。
         """
         menu = f"""--- 📈 模拟炒股 游戏菜单 📉 ---
+(v1.6.0)
+
+/炒股 开启推送
+  - (群聊) 在本群开启股市新闻(全球/突发)推送。
+
+/炒股 关闭推送
+  - (群聊) 在本群关闭股市新闻推送。
 
 /炒股 开户
   - 加入游戏，获取启动资金。
+  - (注意: 开户不再自动开启推送)
 
-/炒股 市场新闻
+/炒股 全球局势
   - 查看当前影响市场的“全球事件”(市场气候)。
 
+/炒股 新闻
+  - 查看最近一次发生的“突发事件”(市场天气)。
+
 /炒股 大盘
-  - (HTML图片) 查看所有股票的当前价格和市场气候摘要。
+  - (HTML图片) 查看所有股票的当前价格和全球局势。
 
 /炒股 详情 [股票代码]
   - (K线图) 查看单支股票的详细信息和历史价格曲线。
@@ -346,20 +372,57 @@ class StockMarketPlugin(Star):
   - 查看你持有的现金和股票。
 
 /炒股 买入 [股票代码] [数量]
-  - 购买指定数量的股票。
   - 示例: /炒股 买入 QLAI 10
 
 /炒股 卖出 [股票代码] [数量]
-  - 卖出你持有的股票。
   - 示例: /炒股 卖出 QLAI 10
 """
-        # (v1.5) 按要求取消T2I，改为纯文本
         yield event.plain_result(menu)
+
+    # (v1.6 新增)
+    @stock_group.command("开启推送")
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def enable_push(self, event: AstrMessageEvent):
+        """
+        在本群开启新闻推送。
+        """
+        group_id = event.get_group_id()
+        if not group_id:
+            yield event.plain_result("此功能仅限群聊使用。")
+            return
+
+        if group_id in self.playing_groups:
+            yield event.plain_result("本群的新闻推送已经处于开启状态。")
+            return
+
+        await self.enable_push_in_group(group_id)
+        yield event.plain_result("✅ 在本群的股市新闻推送已开启！")
+
+    # (v1.6 新增)
+    @stock_group.command("关闭推送")
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def disable_push(self, event: AstrMessageEvent):
+        """
+        在本群关闭新闻推送。
+        """
+        group_id = event.get_group_id()
+        if not group_id:
+            yield event.plain_result("此功能仅限群聊使用。")
+            return
+
+        if group_id not in self.playing_groups:
+            yield event.plain_result("本群的新闻推送尚未开启。")
+            return
+
+        await self.disable_push_in_group(group_id)
+        yield event.plain_result("❌ 在本群的股市新闻推送已关闭。")
 
     @stock_group.command("开户")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def join_game(self, event: AstrMessageEvent):
-        """ 加入模拟炒股游戏。 (无变化) """
+        """
+        (v1.6) 加入模拟炒股游戏 (不再自动开启推送)。
+        """
         user_name = event.get_sender_name()
         portfolio = await self.get_user_portfolio(event)
 
@@ -369,40 +432,55 @@ class StockMarketPlugin(Star):
 
         new_portfolio = await self.create_user_portfolio(event)
         if new_portfolio:
-            await self.register_group(event.get_group_id())
+            # (v1.6) 移除自动注册
+            # await self.enable_push_in_group(event.get_group_id())
             yield event.plain_result(
                 f"@{user_name} 恭喜您开户成功！\n"
                 f"获得启动资金: ${new_portfolio['cash']:.2f}\n"
-                f"使用 /炒股 菜单 查看所有指令。"
+                f"使用 /炒股 菜单 查看所有指令。\n"
+                f"提示: 使用 /炒股 开启推送 可以在本群接收新闻！"
             )
         else:
             yield event.plain_result("开户失败，似乎无法在私聊中进行游戏。")
 
-    @stock_group.command("市场新闻")
-    async def get_news(self, event: AstrMessageEvent):
+    # (v1.6 改名)
+    @stock_group.command("全球局势")
+    async def get_global_news(self, event: AstrMessageEvent):
         """
-        (v1.5) 查看当前 *所有* 活跃的市场气候 (纯文本)。
+        (v1.6) 查看当前 *所有* 活跃的全球事件 (纯文本)。
         """
-        report = "--- 📰 市场气候报告 📰 ---\n\n"
+        report = "--- 📰 全球局势报告 📰 ---\n\n"
         if not self.active_global_events:
             report += "目前市场风平浪静，暂无全球性事件影响。\n"
         else:
             report += "以下全球事件正在影响市场：\n\n"
             for e in self.active_global_events:
+                # (v1.6) 红涨绿跌
                 impact_str = "利好" if e.get("trend_impact", 0) > 0 else "利空"
-                report += f"【{impact_str}】{e['content']}\n"
+                impact_icon = "📈" if e.get("trend_impact", 0) > 0 else "📉"
+                report += f"【{impact_str}】{impact_icon} {e['content']}\n"
                 report += f"  (剩余时间: {e['remaining_ticks']} 轮刷新)\n\n"
 
         report += "------------------------\n"
-        report += "提示：局部突发事件不会在此显示，会即时推送。"
+        report += "提示：使用 /炒股 新闻 查看最新突发事件。"
 
-        # (v1.5) 按要求取消T2I，改为纯文本
+        yield event.plain_result(report)
+
+    # (v1.6 新增)
+    @stock_group.command("新闻")
+    async def get_local_news(self, event: AstrMessageEvent):
+        """
+        (v1.6) 查看最新一条突发新闻。
+        """
+        report = f"--- 📰 最新突发新闻 📰 ---\n\n{self.last_local_event_news}\n\n"
+        report += "------------------------\n"
+        report += "提示：突发新闻是瞬时发生的，没有持续时间。"
         yield event.plain_result(report)
 
     @stock_group.command("大盘")
     async def view_market(self, event: AstrMessageEvent):
         """
-        (v1.5 重构) 使用 HTML 渲染器查看大盘。
+        (v1.6) 使用 HTML 渲染器查看大盘 (红涨绿跌)。
         """
         if not self.stock_prices:
             yield event.plain_result("股市尚未开盘，请联系管理员检查插件。")
@@ -422,12 +500,13 @@ class StockMarketPlugin(Star):
                     change = price - prev_price
                     change_percent = (change / prev_price) * 100 if prev_price != 0 else 0
 
+                    # (v1.6) 红涨绿跌 逻辑修改
                     if change > 0:
                         change_str = f"↑ {change_percent:+.2f}%"
-                        color_class = "color-green"  # 涨
+                        color_class = "color-red"  # 涨 (红)
                     elif change < 0:
                         change_str = f"↓ {change_percent:+.2f}%"
-                        color_class = "color-red"  # 跌
+                        color_class = "color-green"  # 跌 (绿)
                     else:
                         change_str = "— 0.00%"
 
@@ -440,7 +519,7 @@ class StockMarketPlugin(Star):
                 })
 
         try:
-            # (v1.5) 调用新的渲染器
+            # (v1.6) active_global_events 传递给渲染器
             img_url = await render_market_image(self, self.active_global_events, stocks_to_render)
             yield event.image_result(img_url)
         except Exception as e:
@@ -450,7 +529,7 @@ class StockMarketPlugin(Star):
     @stock_group.command("详情")
     async def view_stock_detail(self, event: AstrMessageEvent, code: str):
         """
-        (v1.5 重构) 使用 HTML 渲染器查看K线图。
+        (v1.6) 查看K线图 (修复K线图Bug, 红涨绿跌)。
         """
         code = code.upper()
 
@@ -463,17 +542,24 @@ class StockMarketPlugin(Star):
             current_price = self.stock_prices.get(code, 0.0)
             price_history = self.price_history.get(code, [])
 
-            price_color = "color-gray"
-            if len(price_history) >= 2:
-                if price_history[-1] > price_history[-2]:
-                    price_color = "#28a745"  # 涨 (绿色)
-                elif price_history[-1] < price_history[-2]:
-                    price_color = "#dc3545"  # 跌 (红色)
+            # (v1.6 Bug修复) 检查历史数据点
+            if len(price_history) < 2:
+                yield event.plain_result(
+                    f"【{code}】历史数据不足 (仅 {len(price_history)} 个数据点)，暂无法绘制K线图。请等待下一次市场刷新。")
+                return
+
+            # (v1.6) 红涨绿跌 逻辑修改
+            price_color = "#6c757d"  # 默认灰色
+            if price_history[-1] > price_history[-2]:
+                price_color = "#dc3545"  # 涨 (红色)
+            elif price_history[-1] < price_history[-2]:
+                price_color = "#28a745"  # 跌 (绿色)
 
             render_data = {
                 "stock_name": stock_info.get("name", "未知"),
                 "stock_code": code,
                 "current_price": f"{current_price:.2f}",
+                # (v1.6) 确保行业是中文
                 "stock_industry": stock_info.get("industry", "未知"),
                 "stock_tags": stock_info.get("tags", []),
                 "price_data_json": json.dumps(price_history),
@@ -481,7 +567,6 @@ class StockMarketPlugin(Star):
             }
 
         try:
-            # (v1.5) 调用新的渲染器
             img_url = await render_stock_detail_image(self, render_data)
             yield event.image_result(img_url)
         except Exception as e:
@@ -525,7 +610,6 @@ class StockMarketPlugin(Star):
             report += "\n------------------------\n"
             report += f"💳 总资产 (现金+市值): ${total_assets:.2f}"
 
-            # (v1.5) 按要求取消T2I，改为纯文本
             yield event.plain_result(report)
 
     @stock_group.command("买入")

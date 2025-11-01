@@ -2,7 +2,7 @@ from typing import List, Dict
 from astrbot.api.star import Star
 from astrbot.api import logger
 
-# --- (新增) 大盘 HTML 模板 ---
+# --- (v1.6.0: 颜色反转) ---
 MARKET_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -28,8 +28,8 @@ MARKET_HTML_TEMPLATE = """
             padding: 5px 0;
             border-bottom: 1px solid #f0f0f0;
         }
-        .climate-item .impact-good { color: #28a745; font-weight: 600; }
-        .climate-item .impact-bad { color: #dc3545; font-weight: 600; }
+        .climate-item .impact-good { color: #dc3545; font-weight: 600; } /* (v1.6) 利好改红色 */
+        .climate-item .impact-bad { color: #28a745; font-weight: 600; } /* (v1.6) 利空改绿色 */
         .climate-item .duration { font-size: 12px; color: #6c757d; }
         .climate-empty { font-size: 14px; color: #6c757d; }
 
@@ -52,8 +52,8 @@ MARKET_HTML_TEMPLATE = """
             margin-top: 5px;
         }
         .stock-card .change { font-size: 14px; font-weight: 500; }
-        .color-red { color: #dc3545; }
-        .color-green { color: #28a745; }
+        .color-red { color: #dc3545; }   /* (v1.6) 红色 (涨) */
+        .color-green { color: #28a745; } /* (v1.6) 绿色 (跌) */
         .color-gray { color: #6c757d; }
 
     </style>
@@ -62,7 +62,7 @@ MARKET_HTML_TEMPLATE = """
     <div class="header">📈 模拟股市大盘</div>
 
     <div class="climate-section">
-        <div class="climate-header">当前市场气候</div>
+        <div class="climate-header">当前全球局势</div>
         {% if climate_events %}
             {% for event in climate_events %}
                 <div class="climate-item">
@@ -170,7 +170,7 @@ KLINE_CHART_TEMPLATE = """
             },
             yaxis: { labels: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
             tooltip: { y: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
-            colors: ['{{ price_color }}'],
+            colors: ['{{ price_color }}'], /* (v1.6) 颜色由 main.py 传入 (红或绿) */
             stroke: { curve: 'smooth', width: 3 },
         };
         var chart = new ApexCharts(document.querySelector("#chart"), options);
