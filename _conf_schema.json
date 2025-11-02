@@ -31,5 +31,11 @@
     "description": "是否在新事件发生或旧事件过期时主动推送新闻",
     "type": "bool",
     "default": true
+  },
+  "umo_group_prefix": {
+    "description": "用于向群组发送消息的会话ID前缀 (例如 NapCat:GroupMessage)",
+    "type": "string",
+    "default": "NapCat:GroupMessage",
+    "hint": "请根据AstrBot会话管理中的实际情况进行修改。"
   }
 }

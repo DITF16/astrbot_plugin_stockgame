@@ -239,10 +239,14 @@ class StockMarketPlugin(Star):
         """
         向所有已加入游戏的群组推送新闻。
         """
+        # 从配置中读取UMO前缀
+        umo_prefix = self.config.get("umo_group_prefix", "NapCat:GroupMessage")
+
         logger.info(f"推送新闻到 {len(self.playing_groups)} 个群组...")
         for group_id in self.playing_groups:
             try:
-                umo = f"NapCat:GroupMessage:{group_id}"
+                # 使用配置的前缀
+                umo = f"{umo_prefix}:{group_id}"
 
                 await self.context.send_message(umo, MessageChain().message(news))
                 await asyncio.sleep(0.5)
