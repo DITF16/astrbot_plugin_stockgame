@@ -2,6 +2,7 @@ import asyncio
 import random
 import json
 import time
+import aiosqlite
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
 import aiofiles
@@ -15,7 +16,8 @@ from .utils.image_renderer import render_market_image, render_stock_detail_image
 
 PLUGIN_NAME = "astrbot_plugin_stockgame"
 DATA_DIR = StarTools.get_data_dir(PLUGIN_NAME)
-USER_DATA_DIR = DATA_DIR / "user_data"
+# USER_DATA_DIR = DATA_DIR / "user_data"
+DB_FILE = DATA_DIR / "portfolios.sqlite"
 STOCKS_FILE = DATA_DIR / "stocks.json"
 GLOBAL_EVENTS_FILE = DATA_DIR / "events_global.json"
 LOCAL_EVENTS_FILE = DATA_DIR / "events_local.json"
@@ -39,6 +41,8 @@ class StockMarketPlugin(Star):
         self.game_lock = asyncio.Lock()
         self.running_task: Optional[asyncio.Task] = None
 
+        self.db_path = DB_FILE
+
         # 游戏核心数据 (只读)
         self.stocks_data: Dict[str, StockData] = {}
         self.global_events: List[GameEvent] = []
@@ -60,7 +64,7 @@ class StockMarketPlugin(Star):
         logger.info(f"初始化 {PLUGIN_NAME}...")
         try:
             DATA_DIR.mkdir(exist_ok=True)
-            USER_DATA_DIR.mkdir(exist_ok=True)
+            await self.init_database()
 
             await initialize_data_files(DATA_DIR)
 
@@ -100,6 +104,47 @@ class StockMarketPlugin(Star):
 
         except Exception as e:
             logger.error(f"{PLUGIN_NAME} 初始化失败: {e}", exc_info=True)
+
+    async def init_database(self):
+        """
+        初始化SQLite数据库和表结构
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # 开启 WAL 模式提高并发性
+                await db.executescript("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+
+                # 创建玩家资产表
+                await db.execute("""
+                                 CREATE TABLE IF NOT EXISTS portfolios
+                                 (
+                                     user_id  TEXT NOT NULL,
+                                     group_id TEXT NOT NULL,
+                                     cash     REAL DEFAULT 0,
+                                     PRIMARY KEY (user_id, group_id)
+                                 )
+                                 """)
+
+                # 创建玩家持仓表
+                await db.execute("""
+                                 CREATE TABLE IF NOT EXISTS holdings
+                                 (
+                                     user_id       TEXT    NOT NULL,
+                                     group_id      TEXT    NOT NULL,
+                                     stock_code    TEXT    NOT NULL,
+                                     amount        INTEGER NOT NULL,
+                                     avg_buy_price REAL    NOT NULL,
+                                     PRIMARY KEY (user_id, group_id, stock_code),
+                                     FOREIGN KEY (user_id, group_id)
+                                         REFERENCES portfolios (user_id, group_id)
+                                         ON DELETE CASCADE
+                                 )
+                                 """)
+                await db.commit()
+            logger.info("数据库 portfolios.sqlite 初始化/连接成功。")
+        except Exception as e:
+            logger.error(f"数据库 {self.db_path} 初始化失败: {e}", exc_info=True)
+            raise e
 
     async def terminate(self):
         """
@@ -276,60 +321,132 @@ class StockMarketPlugin(Star):
         group_id = event.get_group_id()
         if not group_id:
             return None
-        file_path = USER_DATA_DIR / f"{group_id}_{user_id}.json"
-        return await self.load_json_data(file_path, default=None)
+
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # 1. 获取现金
+                async with db.execute(
+                        "SELECT cash FROM portfolios WHERE user_id = ? AND group_id = ?",
+                        (user_id, group_id)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if not row:
+                        return None  # 用户不存在
+
+                    portfolio: Portfolio = {"cash": row[0], "stocks": {}}
+
+                # 2. 获取持仓
+                async with db.execute(
+                        "SELECT stock_code, amount, avg_buy_price FROM holdings WHERE user_id = ? AND group_id = ?",
+                        (user_id, group_id)
+                ) as cursor:
+                    async for stock_code, amount, avg_buy_price in cursor:
+                        portfolio["stocks"][stock_code] = {
+                            "amount": amount,
+                            "avg_buy_price": avg_buy_price
+                        }
+
+                return portfolio
+
+        except Exception as e:
+            logger.error(f"从DB获取 {user_id} (群 {group_id}) portfolio失败: {e}", exc_info=True)
+            return None
 
     async def create_user_portfolio(self, event: AstrMessageEvent) -> Optional[Portfolio]:
         user_id = event.get_sender_id()
         group_id = event.get_group_id()
         if not group_id:
             return None
-        file_path = USER_DATA_DIR / f"{group_id}_{user_id}.json"
-        if file_path.exists():
-            return await self.get_user_portfolio(event)
+
+        # 检查是否已存在
+        existing_portfolio = await self.get_user_portfolio(event)
+        if existing_portfolio:
+            return existing_portfolio
+
+        # 不存在则创建
         starting_cash = self.config.get("starting_cash", 10000)
-        new_portfolio: Portfolio = {"cash": starting_cash, "stocks": {}}
-        await self.save_json_data(file_path, new_portfolio)
-        return new_portfolio
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "INSERT INTO portfolios (user_id, group_id, cash) VALUES (?, ?, ?)",
+                    (user_id, group_id, starting_cash)
+                )
+                await db.commit()
+
+            new_portfolio: Portfolio = {"cash": starting_cash, "stocks": {}}
+            return new_portfolio
+        except Exception as e:
+            logger.error(f"创建用户 {user_id} (群 {group_id}) portfolio失败: {e}", exc_info=True)
+            return None
 
     async def save_user_portfolio(self, event: AstrMessageEvent, portfolio: Portfolio):
         user_id = event.get_sender_id()
         group_id = event.get_group_id()
         if not group_id:
             return
-        file_path = USER_DATA_DIR / f"{group_id}_{user_id}.json"
-        await self.save_json_data(file_path, portfolio)
+
+        cash = portfolio.get("cash", 0.0)
+        stocks = portfolio.get("stocks", {})
+
+        try:
+            # aiosqlite.connect() 的 "async with" 块本身就是一个事务。
+            # 它会在块成功结束时自动 commit，在发生异常时自动 rollback。
+            async with aiosqlite.connect(self.db_path) as db:
+
+                # 1. 更新现金
+                await db.execute(
+                    "UPDATE portfolios SET cash = ? WHERE user_id = ? AND group_id = ?",
+                    (cash, user_id, group_id)
+                )
+
+                # 2. 清空旧持仓
+                await db.execute(
+                    "DELETE FROM holdings WHERE user_id = ? AND group_id = ?",
+                    (user_id, group_id)
+                )
+
+                # 3. 插入新持仓
+                holdings_data = []
+                for code, data in stocks.items():
+                    if data.get("amount", 0) > 0:  # 只插入有数量的
+                        holdings_data.append((
+                            user_id, group_id, code,
+                            data.get("amount"),
+                            data.get("avg_buy_price")
+                        ))
+
+                if holdings_data:
+                    await db.executemany(
+                        "INSERT INTO holdings (user_id, group_id, stock_code, amount, avg_buy_price) VALUES (?, ?, ?, ?, ?)",
+                        holdings_data
+                    )
+
+            # (自动 commit 在这里发生)
+
+        except Exception as e:
+            # (自动 rollback 在这里发生)
+            logger.error(f"保存DB {user_id} (群 {group_id}) portfolio失败: {e}", exc_info=True)
 
     # 获取群组总持仓的方法
     async def get_total_shares_in_group(self, group_id: str, stock_code: str) -> int:
         """
-        异步计算一个群组中特定股票的总持仓量
+        (SQLite版) 异步计算一个群组中特定股票的总持仓量
         """
-        if not group_id or not USER_DATA_DIR.exists():
+        if not group_id:
             return 0
 
-        total_shares = 0
-
-        # 使用同步的 iterdir (通常很快) 列出文件
         try:
-            all_files = [f for f in USER_DATA_DIR.iterdir() if
-                         f.name.startswith(f"{group_id}_") and f.name.endswith(".json")]
-        except FileNotFoundError:
-            return 0  # 目录可能还未创建
-
-        # 异步并发读取所有文件
-        tasks = [self.load_json_data(file_path, default=None) for file_path in all_files]
-        portfolios = await asyncio.gather(*tasks)
-
-        for portfolio in portfolios:
-            if portfolio and "stocks" in portfolio and stock_code in portfolio["stocks"]:
-                try:
-                    # 修改这里：从字典中获取 "amount"
-                    total_shares += int(portfolio["stocks"][stock_code].get("amount", 0))
-                except (ValueError, TypeError):
-                    # 忽略无效数据
-                    pass
-        return total_shares
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute(
+                        "SELECT SUM(amount) FROM holdings WHERE group_id = ? AND stock_code = ?",
+                        (group_id, stock_code)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    # 如果查询结果为 None (即无人持有)，返回 0
+                    return row[0] if row and row[0] is not None else 0
+        except Exception as e:
+            logger.error(f"从DB计算群 {group_id} {stock_code} 总持仓失败: {e}", exc_info=True)
+            return 0
 
 
     async def enable_push_in_group(self, group_id: str):
