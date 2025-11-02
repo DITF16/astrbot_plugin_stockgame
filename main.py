@@ -6,6 +6,7 @@ import aiosqlite
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
 import aiofiles
+import astrbot.api.message_components as Comp
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
@@ -316,10 +317,8 @@ class StockMarketPlugin(Star):
         except Exception as e:
             logger.error(f"保存 {file_path} 失败: {e}", exc_info=True)
 
-    async def get_user_portfolio(self, event: AstrMessageEvent) -> Optional[Portfolio]:
-        user_id = event.get_sender_id()
-        group_id = event.get_group_id()
-        if not group_id:
+    async def get_user_portfolio(self, user_id: str, group_id: str) -> Optional[Portfolio]:
+        if not group_id or not user_id:
             return None
 
         try:
@@ -352,14 +351,12 @@ class StockMarketPlugin(Star):
             logger.error(f"从DB获取 {user_id} (群 {group_id}) portfolio失败: {e}", exc_info=True)
             return None
 
-    async def create_user_portfolio(self, event: AstrMessageEvent) -> Optional[Portfolio]:
-        user_id = event.get_sender_id()
-        group_id = event.get_group_id()
-        if not group_id:
+    async def create_user_portfolio(self, user_id: str, group_id: str) -> Optional[Portfolio]:
+        if not group_id or not user_id:
             return None
 
         # 检查是否已存在
-        existing_portfolio = await self.get_user_portfolio(event)
+        existing_portfolio = await self.get_user_portfolio(user_id, group_id)
         if existing_portfolio:
             return existing_portfolio
 
@@ -379,10 +376,8 @@ class StockMarketPlugin(Star):
             logger.error(f"创建用户 {user_id} (群 {group_id}) portfolio失败: {e}", exc_info=True)
             return None
 
-    async def save_user_portfolio(self, event: AstrMessageEvent, portfolio: Portfolio):
-        user_id = event.get_sender_id()
-        group_id = event.get_group_id()
-        if not group_id:
+    async def save_user_portfolio(self, user_id: str, group_id: str, portfolio: Portfolio):
+        if not group_id or not user_id:
             return
 
         cash = portfolio.get("cash", 0.0)
@@ -564,13 +559,20 @@ class StockMarketPlugin(Star):
         加入模拟炒股游戏。
         """
         user_name = event.get_sender_name()
-        portfolio = await self.get_user_portfolio(event)
+        user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+
+        if not group_id:  # 理论上会被 filter 拦住
+            yield event.plain_result("开户失败，似乎无法在私聊中进行游戏。")
+            return
+
+        portfolio = await self.get_user_portfolio(user_id, group_id)
 
         if portfolio:
             yield event.plain_result(f"@{user_name} 您已经开户了。使用 /炒股 菜单 查看所有指令。")
             return
 
-        new_portfolio = await self.create_user_portfolio(event)
+        new_portfolio = await self.create_user_portfolio(user_id, group_id)
         if new_portfolio:
             yield event.plain_result(
                 f"@{user_name} 恭喜您开户成功！\n"
@@ -579,7 +581,7 @@ class StockMarketPlugin(Star):
                 f"提示: 使用 /炒股 开启推送 可以在本群接收新闻！"
             )
         else:
-            yield event.plain_result("开户失败，似乎无法在私聊中进行游戏。")
+            yield event.plain_result("开户失败，发生未知错误。")
 
 
     @stock_group.command("全球局势")
@@ -668,9 +670,10 @@ class StockMarketPlugin(Star):
         """
         code = code.upper()
         group_id = event.get_group_id()
+        user_id = event.get_sender_id()
 
         # --- 新增：获取玩家个人持仓信息 ---
-        portfolio = await self.get_user_portfolio(event)
+        portfolio = await self.get_user_portfolio(user_id, group_id)
         user_avg_buy_price: Optional[float] = None
         user_held_amount: int = 0
 
@@ -747,7 +750,10 @@ class StockMarketPlugin(Star):
         查看自己的资产和持仓。
         """
         user_name = event.get_sender_name()
-        portfolio = await self.get_user_portfolio(event)
+        user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+
+        portfolio = await self.get_user_portfolio(user_id, group_id)
 
         if not portfolio:
             yield event.plain_result(f"@{user_name} 您尚未开户，请使用 /炒股 开户 加入游戏。")
@@ -819,7 +825,10 @@ class StockMarketPlugin(Star):
     async def buy_stock(self, event: AstrMessageEvent, code: str, amount_str: str):
         """ 购买股票。"""
         user_name = event.get_sender_name()
-        portfolio = await self.get_user_portfolio(event)
+        user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+
+        portfolio = await self.get_user_portfolio(user_id, group_id)
 
         if not portfolio:
             yield event.plain_result(f"@{user_name} 您尚未开户。")
@@ -870,7 +879,7 @@ class StockMarketPlugin(Star):
 
             portfolio["stocks"] = current_holdings
 
-            await self.save_user_portfolio(event, portfolio)
+            await self.save_user_portfolio(user_id, group_id, portfolio)
 
             yield event.plain_result(
                 f"@{user_name} 交易成功！\n"
@@ -886,7 +895,10 @@ class StockMarketPlugin(Star):
     async def sell_stock(self, event: AstrMessageEvent, code: str, amount_str: str):
         """ 卖出股票。 (无变化) """
         user_name = event.get_sender_name()
-        portfolio = await self.get_user_portfolio(event)
+        user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+
+        portfolio = await self.get_user_portfolio(user_id, group_id)
 
         if not portfolio:
             yield event.plain_result(f"@{user_name} 您尚未开户。")
@@ -944,7 +956,7 @@ class StockMarketPlugin(Star):
 
             portfolio["stocks"] = current_holdings
 
-            await self.save_user_portfolio(event, portfolio)
+            await self.save_user_portfolio(user_id, group_id, portfolio)
 
             profit_loss_str = f"获利: ${sale_profit_loss:.2f}"
             if sale_profit_loss < 0:
@@ -960,3 +972,128 @@ class StockMarketPlugin(Star):
                 f"({profit_loss_str})\n"  # 显示本次盈亏
                 f"剩余现金: ${portfolio['cash']:.2f}"
             )
+
+
+    @stock_group.command("全部卖出")
+    async def sell_all_stocks(self, event: AstrMessageEvent):
+        """ 卖出所有持仓股票。 """
+        user_name = event.get_sender_name()
+        user_id = event.get_sender_id()
+        group_id = event.get_group_id()
+
+        portfolio = await self.get_user_portfolio(user_id, group_id)
+
+        if not portfolio:
+            yield event.plain_result(f"@{user_name} 您尚未开户。")
+            return
+
+        holdings = portfolio.get("stocks", {})
+        if not holdings:
+            yield event.plain_result(f"@{user_name} 您没有任何持仓，无需卖出。")
+            return
+
+        total_revenue = 0.0
+        total_cost_basis = 0.0
+        report_lines = []
+
+        async with self.game_lock:
+            for code, data in holdings.items():
+                amount = data.get("amount", 0)
+                avg_buy_price = data.get("avg_buy_price", 0.0)
+                if amount == 0:
+                    continue
+
+                current_price = self.stock_prices.get(code)
+                if current_price is None:
+                    report_lines.append(f"  - 【{code}】: 股票数据异常，无法卖出。")
+                    continue
+
+                revenue = current_price * amount
+                cost_basis = avg_buy_price * amount
+                profit_loss = revenue - cost_basis
+
+                total_revenue += revenue
+                total_cost_basis += cost_basis
+
+                stock_name = self.stocks_data.get(code, {}).get("name", "???")
+                pl_str = f"盈利 ${profit_loss:.2f}" if profit_loss >= 0 else f"亏损 -${abs(profit_loss):.2f}"
+                report_lines.append(f"  - 【{code}】{stock_name}: 卖出 {amount} 股, {pl_str}")
+
+        if not report_lines:
+            yield event.plain_result(f"@{user_name} 持仓的股票均数据异常，无法卖出。")
+            return
+
+        # 更新资产
+        portfolio["cash"] = portfolio.get("cash", 0.0) + total_revenue
+        portfolio["stocks"] = {}  # 清空持仓
+
+        await self.save_user_portfolio(user_id, group_id, portfolio)
+
+        total_profit_loss = total_revenue - total_cost_basis
+        pl_icon = "📈" if total_profit_loss > 0 else "📉" if total_profit_loss < 0 else "➖"
+
+        report = f"@{user_name} 已全部卖出！\n\n"
+        report += "--- 交易详情 ---\n"
+        report += "\n".join(report_lines)
+        report += "\n------------------\n"
+        report += f"💰 总收入: ${total_revenue:.2f}\n"
+        report += f"{pl_icon} 总盈亏: ${total_profit_loss:+.2f}\n"
+        report += f"💳 剩余现金: ${portfolio['cash']:.2f}"
+
+        yield event.plain_result(report)
+
+
+    @stock_group.command("奖励资金")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def admin_give_cash(self, event: AstrMessageEvent, amount_str: str):
+        """ (管理员) 奖励资金 [金额] [@用户] """
+
+        try:
+            amount = float(amount_str)
+            if amount <= 0:
+                raise ValueError("金额必须为正数")
+        except (ValueError, TypeError):
+            yield event.plain_result("金额无效。用法: /炒股 奖励资金 10000 [@用户]")
+            return
+
+        # --- 修正处：根据文档遍历 event.message_obj.message ---
+        mention_id: Optional[str] = None
+
+        # 遍历消息链
+        for component in event.message_obj.message:
+            # 检查组件是否为 At (艾特) 类型
+            if isinstance(component, Comp.At):
+                # 假设 At 组件有 'qq' 属性来获取ID
+                # (根据您提供的文档 Comp.At(qq=123456) 和项目中使用 NapCat 推断)
+                try:
+                    mention_id = str(component.qq)
+                    break  # 找到第一个@就停止
+                except AttributeError:
+                    logger.warning(f"检测到 At 组件但无法获取 'qq' 属性: {component}")
+        # --- 修正结束 ---
+
+        if not mention_id:
+            yield event.plain_result("请 @ 你要奖励的用户。用法: /炒股 奖励资金 10000 [@用户]")
+            return
+
+        target_user_id = mention_id
+        group_id = event.get_group_id()
+        if not group_id:
+            return  # 理论上已被 filter 阻止
+
+        target_portfolio = await self.get_user_portfolio(target_user_id, group_id)
+        if not target_portfolio:
+            yield event.plain_result(f"@{target_user_id} 该用户尚未开户，无法奖励。")
+            return
+
+        target_portfolio["cash"] = target_portfolio.get("cash", 0.0) + amount
+
+        await self.save_user_portfolio(target_user_id, group_id, target_portfolio)
+
+        admin_name = event.get_sender_name()
+        yield event.plain_result(
+            f"✅ 操作成功！\n"
+            f"管理员 @{admin_name} 已向 @{target_user_id} 奖励资金 ${amount:.2f}。\n"
+            f"该用户当前现金: ${target_portfolio['cash']:.2f}"
+        )
