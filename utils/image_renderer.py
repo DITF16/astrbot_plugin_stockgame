@@ -26,22 +26,40 @@ matplotlib.use('Agg')
 # 设置中文字体
 try:
     CHINESE_FONT = None
-    # 常见的字体名称列表
-    font_names = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'Heiti TC', 'sans-serif']
-    for font_name in font_names:
-        try:
-            # 尝试查找字体
-            prop = fm.FontProperties(fname=fm.findfont(fm.FontProperties(family=font_name)))
-            CHINESE_FONT = prop.get_name()
-            logger.info(f"Matplotlib 找到可用中文字体: {CHINESE_FONT}")
-            break
-        except Exception:
-            continue
 
-    if CHINESE_FONT:
-        plt.rcParams['font.sans-serif'] = [CHINESE_FONT]
-    else:
-        logger.warning("未找到可用的中文字体(如SimHei, Microsoft YaHei)，图表中的中文可能显示为方块。")
+    # 优先尝试加载插件自带的字体文件
+    plugin_font_path = DATA_DIR / "resources" / "font.ttf"
+
+    if plugin_font_path.exists():
+        try:
+            # 加载插件目录下的字体
+            prop = fm.FontProperties(fname=str(plugin_font_path))
+            CHINESE_FONT = prop.get_name()
+            logger.info(f"Matplotlib 找到并加载插件字体: {plugin_font_path}")
+            # 使用 font.family 而不是 font.sans-serif 来直接指定
+            plt.rcParams['font.family'] = CHINESE_FONT
+        except Exception as e:
+            logger.error(f"加载插件字体 {plugin_font_path} 失败: {e}。将尝试系统字体。")
+
+    if not CHINESE_FONT:
+        # 如果插件字体不存在或加载失败，则回退到搜索系统字体
+        logger.info("未找到插件字体，正在搜索系统字体...")
+        font_names = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'Heiti TC', 'sans-serif']
+        for font_name in font_names:
+            try:
+                # 尝试查找字体
+                prop = fm.FontProperties(fname=fm.findfont(fm.FontProperties(family=font_name)))
+                CHINESE_FONT = prop.get_name()
+                logger.info(f"Matplotlib 找到可用系统字体: {CHINESE_FONT}")
+                break
+            except Exception:
+                continue
+
+        if CHINESE_FONT:
+            plt.rcParams['font.sans-serif'] = [CHINESE_FONT]
+        else:
+            logger.warning("未找到任何可用的中文字体(插件或系统)，图表中的中文可能显示为方块。")
+
     # 解决负号显示问题
     plt.rcParams['axes.unicode_minus'] = False
 except Exception as e:
