@@ -13,6 +13,7 @@ from astrbot.core.star import StarTools
 PLUGIN_NAME = "astrbot_plugin_stockgame"
 DATA_DIR = StarTools.get_data_dir(PLUGIN_NAME)
 TEMP_DIR = DATA_DIR / "tmp"
+RESOURCES_DIR = DATA_DIR / "resources"  # (新增) 字体目录
 
 # 确保tmp目录存在
 try:
@@ -23,40 +24,84 @@ except Exception as e:
 # 设置 matplotlib 使用 'Agg' 后端
 matplotlib.use('Agg')
 
-# 加载字体逻辑
-CHINESE_FONT_PROP = None  # 我们将使用这个变量
+# (重大修改) 强制加载和注册 `resources` 目录下的所有中文字体
 try:
-    # 优先尝试加载插件自带的字体文件
-    plugin_font_path = DATA_DIR / "resources" / "font.ttf"
-
-    if plugin_font_path.exists():
-        try:
-            # 直接加载字体属性，而不是依赖rcParams
-            CHINESE_FONT_PROP = fm.FontProperties(fname=str(plugin_font_path))
-            logger.info(f"Matplotlib 成功加载插件字体: {plugin_font_path}")
-        except Exception as e:
-            logger.error(f"加载插件字体 {plugin_font_path} 失败: {e}。将尝试系统字体。")
-
-    if not CHINESE_FONT_PROP:
-        # 回退逻辑
-        logger.info("未找到插件字体，正在搜索系统字体...")
-        font_names = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'Heiti TC', 'sans-serif']
-        for font_name in font_names:
-            try:
-                # 尝试查找字体
-                CHINESE_FONT_PROP = fm.FontProperties(fname=fm.findfont(fm.FontProperties(family=font_name)))
-                logger.info(f"Matplotlib 找到可用系统字体: {CHINESE_FONT_PROP.get_name()}")
-                break
-            except Exception:
-                continue
-
-    if not CHINESE_FONT_PROP:
-        logger.warning("未找到任何可用的中文字体(插件或系统)，图表中的中文可能显示为方块。")
-
     # 解决负号显示问题
     plt.rcParams['axes.unicode_minus'] = False
+
+    # 1. 确保字体文件夹存在
+    if not RESOURCES_DIR.exists():
+        RESOURCES_DIR.mkdir(parents=True)
+        logger.warning(f"插件 'resources' 目录未找到，已自动创建: {RESOURCES_DIR}")
+
+    # 2. 准备一个列表，存放所有我们成功注册的字体名称
+    # 我们将优先使用插件自带的字体
+    font_names_to_register = []
+
+    # 3. (关键) 遍历 resources 目录下的所有 .ttf 和 .otf 字体文件
+    font_files = list(RESOURCES_DIR.glob("*.ttf")) + list(RESOURCES_DIR.glob("*.otf")) + list(RESOURCES_DIR.glob("*.ttc"))
+
+    if not font_files:
+        logger.warning(f"未在 {RESOURCES_DIR} 中找到任何字体文件。将依赖系统字体。")
+
+    for font_path in font_files:
+        try:
+            font_path_str = str(font_path)
+            # 3.1. (关键) 强制将字体文件添加到 Matplotlib 的管理器中
+            # 这会更新缓存，让 matplotlib "知道" 这个字体
+            fm.fontManager.addfont(font_path_str)
+
+            # 3.2. 获取该字体的内部名称
+            prop = fm.FontProperties(fname=font_path_str)
+            font_name = prop.get_name()  # e.g., "Source Han Sans CN"
+
+            if font_name not in font_names_to_register:
+                font_names_to_register.append(font_name)
+            logger.info(f"Matplotlib 成功注册插件字体: {font_name} (来自 {font_path.name})")
+
+        except Exception as e:
+            logger.error(f"加载或注册插件字体 {font_path.name} 失败: {e}。")
+
+    # 4. (关键) 添加在Docker/Linux/Windows中常见的备用字体
+    # Matplotlib 会按顺序尝试列表中的每个字体
+    system_fallbacks = [
+        # (我们把在Docker中常见的字体名称也加到备用列表里)
+        'WenQuanYi Zen Hei',
+        'Noto Sans CJK SC',
+        'SimHei',
+        'Microsoft YaHei',
+        'sans-serif'  # 最后的备用
+    ]
+
+    for font in system_fallbacks:
+        if font not in font_names_to_register:
+            # 检查系统字体是否真的存在，防止无效名称污染列表
+            try:
+                if fm.findfont(font, fallback_to_default=False):
+                    font_names_to_register.append(font)
+            except Exception:
+                pass  # 字体不存在
+
+    # 确保 'sans-serif' 始终在最后
+    if 'sans-serif' not in font_names_to_register:
+        font_names_to_register.append('sans-serif')
+
+    # 5. (关键) 设置全局rcParams使用这个“字体列表”
+    if not font_names_to_register:
+        logger.error("未找到任何可用的中文字体！图表将显示为方块。")
+        raise RuntimeError("无可用字体")
+
+    logger.info(f"Matplotlib 全局字体回退列表已设置为: {font_names_to_register}")
+
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = font_names_to_register
+
 except Exception as e:
-    logger.error(f"设置 Matplotlib 中文字体时出错: {e}")
+    logger.error(f"设置 Matplotlib 中文字体时发生严重错误: {e}", exc_info=True)
+    # 最终回退
+    plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['sans-serif']
 
 # 大盘视图的HTML模板
 MARKET_HTML_TEMPLATE = """
@@ -201,11 +246,6 @@ async def render_stock_detail_image_matplotlib(star_instance: Star, render_data:
     使用 Matplotlib 渲染股票详情图, 保存为文件并返回路径
     """
 
-    # 检查字体是否加载成功
-    if not CHINESE_FONT_PROP:
-        logger.error("Matplotlib 渲染失败，因为没有可用的中文字体。")
-        raise RuntimeError("无法加载中文字体，无法渲染图表。")
-
     # 提取数据
     stock_name = render_data.get("stock_name", "未知")
     stock_code = render_data.get("stock_code", "???")
@@ -233,9 +273,7 @@ async def render_stock_detail_image_matplotlib(star_instance: Star, render_data:
 
     # 设置标题和主要信息
     title = f"{stock_name} ( {stock_code} )"
-    # 将标题和价格放在图表顶部，使用 fig.text 精确控制位置
-    fig.text(0.05, 0.95, title, fontsize=20, fontweight='bold', ha='left', va='top',
-             fontproperties=CHINESE_FONT_PROP)
+    fig.text(0.05, 0.95, title, fontsize=20, fontweight='bold', ha='left', va='top')
 
     fig.text(0.05, 0.90, f"${current_price_str}",
              fontsize=24,
@@ -252,24 +290,22 @@ async def render_stock_detail_image_matplotlib(star_instance: Star, render_data:
                  fontsize=12,
                  color='#333333',
                  ha='right',
-                 va='top',
-                 fontproperties=CHINESE_FONT_PROP)
+                 va='top')
 
     # 格式化Y轴 (价格)
-    ax.set_ylabel("价格 ($)", fontproperties=CHINESE_FONT_PROP)
+    ax.set_ylabel("价格 ($)")
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'${y:.2f}'))
     ax.yaxis.tick_right()
     ax.yaxis.set_label_position("right")
     ax.yaxis.set_label_coords(1.05, 0.5)
 
     # 格式化X轴 (时间)
-    ax.set_xlabel("时间", fontproperties=CHINESE_FONT_PROP)
+    ax.set_xlabel("时间")
     total_ticks = len(timeline)
 
     # 简化X轴标签，只显示 "最早" 和 "现在"
     ax.set_xticks([0, total_ticks - 1])
-    # 强制为X轴标签设置字体
-    ax.set_xticklabels(['最早', '现在'], fontproperties=CHINESE_FONT_PROP)
+    ax.set_xticklabels(['最早', '现在'])
     ax.set_xlim(0, total_ticks - 1)  # 确保图表填满
 
     # 移除图表边框
@@ -293,8 +329,7 @@ async def render_stock_detail_image_matplotlib(star_instance: Star, render_data:
              color='#555555',
              ha='left',
              va='top',
-             wrap=True,
-             fontproperties=CHINESE_FONT_PROP)
+             wrap=True)
 
     # 将图像保存到临时文件
     try:
