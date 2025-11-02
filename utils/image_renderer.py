@@ -1,18 +1,53 @@
-from typing import List, Dict
-from astrbot.api.star import Star
-from astrbot.api import logger
+import asyncio
+import time
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from pathlib import Path
+from typing import Dict, List
+from astrbot.api import logger
+from astrbot.api.star import Star
+from astrbot.core.star import StarTools
 
-APEXCHARTS_JS_CODE = ""
+PLUGIN_NAME = "astrbot_plugin_stockgame"
+DATA_DIR = StarTools.get_data_dir(PLUGIN_NAME)
+TEMP_DIR = DATA_DIR / "tmp"
+
+# 确保tmp目录存在
 try:
-    JS_FILE_PATH = Path(__file__).parent / "apexcharts.min.js"
-    with open(JS_FILE_PATH, 'r', encoding='utf-8') as f:
-        APEXCHARTS_JS_CODE = f.read()
-    logger.info("本地 apexcharts.min.js 加载成功。")
+    TEMP_DIR.mkdir(exist_ok=True, parents=True)
 except Exception as e:
-    logger.error(f"加载本地 apexcharts.min.js 失败: {e}。K线图将无法渲染！")
+    logger.error(f"创建 {TEMP_DIR} 目录失败: {e}")
 
+# 设置 matplotlib 使用 'Agg' 后端，避免GUI问题
+matplotlib.use('Agg')
 
+# 设置中文字体
+try:
+    CHINESE_FONT = None
+    # 常见的字体名称列表
+    font_names = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'Heiti TC', 'sans-serif']
+    for font_name in font_names:
+        try:
+            # 尝试查找字体
+            prop = fm.FontProperties(fname=fm.findfont(fm.FontProperties(family=font_name)))
+            CHINESE_FONT = prop.get_name()
+            logger.info(f"Matplotlib 找到可用中文字体: {CHINESE_FONT}")
+            break
+        except Exception:
+            continue
+
+    if CHINESE_FONT:
+        plt.rcParams['font.sans-serif'] = [CHINESE_FONT]
+    else:
+        logger.warning("未找到可用的中文字体(如SimHei, Microsoft YaHei)，图表中的中文可能显示为方块。")
+    # 解决负号显示问题
+    plt.rcParams['axes.unicode_minus'] = False
+except Exception as e:
+    logger.error(f"设置 Matplotlib 中文字体时出错: {e}")
+
+# 大盘视图的HTML模板
 MARKET_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -107,90 +142,6 @@ MARKET_HTML_TEMPLATE = """
 """
 
 
-KLINE_CHART_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>{{ apexcharts_js | safe }}</script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: #ffffff;
-            color: #212529;
-            padding: 15px;
-            width: 600px; /* 固定宽度 */
-            overflow: hidden;
-        }
-        #chart { width: 100%; max-width: 600px; }
-        .header { margin-bottom: 10px; }
-        .stock-name { font-size: 24px; font-weight: 600; }
-        .stock-code { font-size: 16px; color: #6c757d; margin-left: 8px; }
-        .price { font-size: 28px; font-weight: 700; color: {{ price_color }}; margin-top: 5px; }
-        .info { margin-top: 15px; font-size: 14px; }
-        .info strong { color: #495057; }
-        .tag {
-            display: inline-block;
-            background-color: #e9ecef;
-            color: #495057;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 12px;
-            margin: 2px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <span class="stock-name">{{ stock_name }}</span>
-        <span class="stock-code">【{{ stock_code }}】</span>
-        <div class="price">${{ current_price }}</div>
-    </div>
-    <div id="chart"></div>
-    <div class="info">
-        <div><strong>所属行业:</strong> {{ industry }}</div>
-        <div>
-            <strong>概念标签:</strong>
-            {% for tag in tags %}
-                <span class="tag">{{ tag }}</span>
-            {% endfor %}
-        </div>
-    </div>
-    <script>
-        const priceData = {{ price_data_json | safe }};
-        const categories = priceData.map((_, index) => `T-${priceData.length - 1 - index}`);
-        var options = {
-            chart: { type: 'line', height: 250, animations: { enabled: false }, toolbar: { show: false } },
-            series: [{ name: '价格', data: priceData }],
-            xaxis: {
-                categories: categories,
-                labels: {
-                    show: true,
-                    formatter: function (value, timestamp, opts) {
-                        const total = categories.length;
-                        if (opts.dataPointIndex === 0) return '最早';
-                        if (opts.dataPointIndex === total - 1) return '现在';
-                        const interval = Math.ceil(total / 10);
-                        if (interval > 1 && opts.dataPointIndex % interval === 0) { return value; }
-                        return '';
-                    }
-                },
-                tooltip: { enabled: false }
-            },
-            yaxis: { labels: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
-            tooltip: { y: { formatter: (value) => { return `$${value.toFixed(2)}` } } },
-            colors: ['{{ price_color }}'], /* 颜色由 main.py 传入 (红或绿) */
-            stroke: { curve: 'smooth', width: 3 },
-        };
-        var chart = new ApexCharts(document.querySelector("#chart"), options);
-        chart.render();
-    </script>
-</body>
-</html>
-"""
-
-
 async def render_market_image(star_instance: Star, climate_events: List[Dict], stocks_to_render: List[Dict]) -> str:
     """
     使用 html_render 渲染漂亮的大盘图片
@@ -204,7 +155,7 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
-            options={"timeout": 10000, "execute_js": True}
+            options={"timeout": 10000}
         )
         return img_url
     except Exception as e:
@@ -212,19 +163,135 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         raise  # 抛出异常，让主逻辑去处理
 
 
-async def render_stock_detail_image(star_instance: Star, render_data: Dict) -> str:
+# 辅助函数，用于清理临时文件
+async def cleanup_temp_files(temp_dir: Path, keep_latest: int = 5):
     """
-    (迁移) 使用 html_render 渲染K线图
+    异步清理旧的临时图片，防止塞满硬盘
     """
     try:
-        render_data["apexcharts_js"] = APEXCHARTS_JS_CODE
-
-        img_url = await star_instance.html_render(
-            KLINE_CHART_TEMPLATE,
-            render_data,
-            options={"timeout": 10000, "execute_js": True}
+        # 查找所有 stock_*.png 文件，按修改时间排序
+        files = sorted(
+            [f for f in temp_dir.glob("stock_*.png") if f.is_file()],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
         )
-        return img_url
+
+        # 保留最新的 'keep_latest' 个文件，删除其余
+        if len(files) > keep_latest:
+            files_to_delete = files[keep_latest:]
+            for f in files_to_delete:
+                f.unlink()
     except Exception as e:
-        logger.error(f"渲染K线图HTML {render_data.get('stock_code')} 失败: {e}", exc_info=True)
+        logger.warning(f"清理临时图片文件失败: {e}")
+
+
+async def render_stock_detail_image_matplotlib(star_instance: Star, render_data: Dict) -> str:
+    """
+    使用 Matplotlib 渲染股票详情图, 保存为文件并返回路径
+    """
+
+    # 提取数据
+    stock_name = render_data.get("stock_name", "未知")
+    stock_code = render_data.get("stock_code", "???")
+    current_price_str = render_data.get("current_price", "0.00")
+    price_color = render_data.get("price_color", "#000000")
+    price_data = render_data.get("price_data", [])
+    total_shares = render_data.get("total_shares", 0)
+    group_id = render_data.get("group_id", None)
+    stock_industry = render_data.get("stock_industry", "未知")
+    stock_tags = render_data.get("stock_tags", [])
+
+    # 创建图像 (800x600 像素)
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
+    fig.patch.set_facecolor('#ffffff')  # 设置画布背景为白色
+    ax.set_facecolor('#ffffff')  # 设置绘图区背景为白色
+
+    # 绘制主折线图
+    prices = np.array(price_data)
+    timeline = np.arange(len(prices))
+
+    ax.plot(timeline, prices, color=price_color, linewidth=2.5, zorder=10)
+
+    # 填充图表下方的区域
+    ax.fill_between(timeline, prices, color=price_color, alpha=0.1)
+
+    # 设置标题和主要信息
+    title = f"{stock_name} ( {stock_code} )"
+    # 将标题和价格放在图表顶部，使用 fig.text 精确控制位置
+    fig.text(0.05, 0.95, title, fontsize=20, fontweight='bold', ha='left', va='top')
+    fig.text(0.05, 0.90, f"${current_price_str}",
+             fontsize=24,
+             fontweight='bold',
+             color=price_color,
+             ha='left',
+             va='top')
+
+    # (新功能) 在图表右上方显示持仓量
+    if group_id:
+        shares_text = f"当前群组总持仓: {total_shares} 股"
+        fig.text(0.95, 0.90, shares_text,
+                 transform=fig.transFigure,
+                 fontsize=12,
+                 color='#333333',
+                 ha='right',
+                 va='top')
+
+    # 格式化Y轴 (价格)
+    ax.set_ylabel("价格 ($)")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'${y:.2f}'))
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
+    ax.yaxis.set_label_coords(1.05, 0.5)
+
+    # 格式化X轴 (时间)
+    ax.set_xlabel("时间")
+    total_ticks = len(timeline)
+
+    # 简化X轴标签，只显示 "最早" 和 "现在"
+    ax.set_xticks([0, total_ticks - 1])
+    ax.set_xticklabels(['最早', '现在'])
+    ax.set_xlim(0, total_ticks - 1)  # 确保图表填满
+
+    # 移除图表边框
+    ax.spines['top'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_color('#dddddd')
+    ax.spines['right'].set_color('#dddddd')
+
+    # 添加网格线
+    ax.grid(True, which='major', axis='y', linestyle='--', color='#e5e5e5', zorder=0)
+
+    # 添加底部的行业和标签信息
+    tags_str = "  ".join([f"#{t}" for t in stock_tags])
+    info_text = f"所属行业: {stock_industry}\n概念标签: {tags_str if tags_str else '无'}"
+
+    # 调整图表布局，为底部文本留出空间
+    plt.subplots_adjust(bottom=0.2, top=0.80)
+    fig.text(0.05, 0.1, info_text,
+             transform=fig.transFigure,
+             fontsize=11,
+             color='#555555',
+             ha='left',
+             va='top',
+             wrap=True)
+
+    # 将图像保存到临时文件
+    try:
+        # 创建一个唯一的文件名
+        temp_file_name = f"stock_{stock_code.replace('.', '_')}_{int(time.time() * 1000)}.png"
+        temp_file_path = TEMP_DIR / temp_file_name
+
+        # 使用 bbox_inches='tight' 来裁剪空白边缘
+        plt.savefig(temp_file_path, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+
+        # 异步清理旧的临时图片
+        asyncio.create_task(cleanup_temp_files(TEMP_DIR, keep_latest=5))
+
+        # 返回文件路径
+        return str(temp_file_path)
+
+    except Exception as e:
+        logger.error(f"保存Matplotlib图像 {stock_code} 到文件失败: {e}", exc_info=True)
         raise
+    finally:
+        plt.close(fig)  # 确保释放内存

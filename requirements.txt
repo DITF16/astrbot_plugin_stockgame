@@ -1,1 +1,3 @@
 aiofiles
+matplotlib
+numpy

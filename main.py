@@ -10,7 +10,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
 from astrbot.core.star import StarTools
 from .utils.config_manager import initialize_data_files
-from .utils.image_renderer import render_market_image, render_stock_detail_image
+from .utils.image_renderer import render_market_image, render_stock_detail_image_matplotlib
 
 
 PLUGIN_NAME = "astrbot_plugin_stockgame"
@@ -296,6 +296,36 @@ class StockMarketPlugin(Star):
         file_path = USER_DATA_DIR / f"{group_id}_{user_id}.json"
         await self.save_json_data(file_path, portfolio)
 
+    # 获取群组总持仓的方法
+    async def get_total_shares_in_group(self, group_id: str, stock_code: str) -> int:
+        """
+        异步计算一个群组中特定股票的总持仓量
+        """
+        if not group_id or not USER_DATA_DIR.exists():
+            return 0
+
+        total_shares = 0
+
+        # 使用同步的 iterdir (通常很快) 列出文件
+        try:
+            all_files = [f for f in USER_DATA_DIR.iterdir() if
+                         f.name.startswith(f"{group_id}_") and f.name.endswith(".json")]
+        except FileNotFoundError:
+            return 0  # 目录可能还未创建
+
+        # 异步并发读取所有文件
+        tasks = [self.load_json_data(file_path, default=None) for file_path in all_files]
+        portfolios = await asyncio.gather(*tasks)
+
+        for portfolio in portfolios:
+            if portfolio and "stocks" in portfolio and stock_code in portfolio["stocks"]:
+                try:
+                    total_shares += int(portfolio["stocks"][stock_code])
+                except (ValueError, TypeError):
+                    # 忽略无效数据
+                    pass
+        return total_shares
+
 
     async def enable_push_in_group(self, group_id: str):
         if group_id and group_id not in self.playing_groups:
@@ -512,9 +542,25 @@ class StockMarketPlugin(Star):
     @stock_group.command("详情")
     async def view_stock_detail(self, event: AstrMessageEvent, code: str):
         """
-        K线图。
+        (K线图) - 已修改为Matplotlib
         """
         code = code.upper()
+        group_id = event.get_group_id()
+
+        # 先在锁外获取持仓数据
+        total_shares = 0
+        if group_id:
+            try:
+                total_shares = await self.get_total_shares_in_group(group_id, code)
+            except Exception as e:
+                logger.error(f"获取群组 {group_id} 总持仓 {code} 失败: {e}", exc_info=True)
+                # 即使失败也继续，只是不显示持仓量
+
+        # 在锁内获取价格数据
+        stock_info = None
+        current_price = 0.0
+        price_history = []
+        price_color = "#6c757d"  # 默认灰色
 
         async with self.game_lock:
             stock_info = self.stocks_data.get(code)
@@ -530,27 +576,30 @@ class StockMarketPlugin(Star):
                     f"【{code}】历史数据不足 (仅 {len(price_history)} 个数据点)，暂无法绘制K线图。请等待下一次市场刷新。")
                 return
 
-            price_color = "#6c757d"  # 默认灰色
             if price_history[-1] > price_history[-2]:
                 price_color = "#dc3545"  # 涨 (红色)
             elif price_history[-1] < price_history[-2]:
                 price_color = "#28a745"  # 跌 (绿色)
 
-            render_data = {
-                "stock_name": stock_info.get("name", "未知"),
-                "stock_code": code,
-                "current_price": f"{current_price:.2f}",
-                "stock_industry": stock_info.get("industry", "未知"),
-                "stock_tags": stock_info.get("tags", []),
-                "price_data_json": json.dumps(price_history),
-                "price_color": price_color
-            }
+        # 准备渲染数据
+        render_data = {
+            "stock_name": stock_info.get("name", "未知"),
+            "stock_code": code,
+            "current_price": f"{current_price:.2f}",
+            "stock_industry": stock_info.get("industry", "未知"),
+            "stock_tags": stock_info.get("tags", []),
+            "price_data": price_history,
+            "price_color": price_color,
+            "total_shares": total_shares,  # 总持仓数据
+            "group_id": group_id  # 传递group_id用于图表标题
+        }
 
+        # 调用Matplotlib渲染器
         try:
-            img_url = await render_stock_detail_image(self, render_data)
+            img_url = await render_stock_detail_image_matplotlib(self, render_data)
             yield event.image_result(img_url)
         except Exception as e:
-            logger.error(f"渲染K线图 {code} 失败: {e}", exc_info=True)
+            logger.error(f"渲染Matplotlib K线图 {code} 失败: {e}", exc_info=True)
             yield event.plain_result(f"渲染股票 {code} 的K线图时发生内部错误。")
 
     @stock_group.command("我的资产")
