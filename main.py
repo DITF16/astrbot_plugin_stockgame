@@ -242,12 +242,12 @@ class StockMarketPlugin(Star):
         logger.info(f"推送新闻到 {len(self.playing_groups)} 个群组...")
         for group_id in self.playing_groups:
             try:
-                umo = f"napcat:GroupMessage:{group_id}"
+                umo = f"NapCat:GroupMessage:{group_id}"
 
                 await self.context.send_message(umo, MessageChain().message(news))
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logger.warning(f"推送新闻到群 {group_id} 失败: {e}")
+                logger.error(f"!!! 推送新闻到群 {group_id} 失败: {e}", exc_info=True)
 
     async def load_json_data(self, file_path: Path, default: Any = None) -> Any:
         try:
