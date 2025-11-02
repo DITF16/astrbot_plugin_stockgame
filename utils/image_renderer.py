@@ -13,7 +13,7 @@ from astrbot.core.star import StarTools
 PLUGIN_NAME = "astrbot_plugin_stockgame"
 DATA_DIR = StarTools.get_data_dir(PLUGIN_NAME)
 TEMP_DIR = DATA_DIR / "tmp"
-RESOURCES_DIR = DATA_DIR / "resources"  # (新增) 字体目录
+RESOURCES_DIR = Path(__file__).parent.parent / "resources"
 
 # 确保tmp目录存在
 try:
