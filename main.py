@@ -324,7 +324,8 @@ class StockMarketPlugin(Star):
         for portfolio in portfolios:
             if portfolio and "stocks" in portfolio and stock_code in portfolio["stocks"]:
                 try:
-                    total_shares += int(portfolio["stocks"][stock_code])
+                    # 修改这里：从字典中获取 "amount"
+                    total_shares += int(portfolio["stocks"][stock_code].get("amount", 0))
                 except (ValueError, TypeError):
                     # 忽略无效数据
                     pass
@@ -551,6 +552,18 @@ class StockMarketPlugin(Star):
         code = code.upper()
         group_id = event.get_group_id()
 
+        # --- 新增：获取玩家个人持仓信息 ---
+        portfolio = await self.get_user_portfolio(event)
+        user_avg_buy_price: Optional[float] = None
+        user_held_amount: int = 0
+
+        if portfolio:
+            user_stock_data = portfolio.get("stocks", {}).get(code)
+            if user_stock_data:
+                user_avg_buy_price = user_stock_data.get("avg_buy_price")
+                user_held_amount = user_stock_data.get("amount", 0)
+        # --- 新增结束 ---
+
         # 先在锁外获取持仓数据
         total_shares = 0
         if group_id:
@@ -595,11 +608,16 @@ class StockMarketPlugin(Star):
             "price_data": price_history,
             "price_color": price_color,
             "total_shares": total_shares,  # 总持仓数据
-            "group_id": group_id  # 传递group_id用于图表标题
+            "group_id": group_id,  # 传递group_id用于图表标题
+
+            # --- 新增：传入玩家持仓数据 ---
+            "user_avg_buy_price": user_avg_buy_price,
+            "user_held_amount": user_held_amount
         }
 
         # 调用Matplotlib渲染器
         try:
+            # 假设 render_stock_detail_image_matplotlib 已经被更新以处理新的数据
             img_url = await render_stock_detail_image_matplotlib(self, render_data)
             yield event.image_result(img_url)
         except Exception as e:
@@ -627,21 +645,56 @@ class StockMarketPlugin(Star):
             report += "📊 持仓详情:\n"
 
             total_stock_value = 0.0
+            total_cost_basis = 0.0  # 总成本
+
             if not holdings:
                 report += "  (暂无持仓)\n"
             else:
-                for code, amount in holdings.items():
+                # 修改此循环以处理新数据结构
+                for code, data in holdings.items():
+                    amount = data.get("amount", 0)
+                    if amount == 0:
+                        continue  # 跳过无效数据
+
+                    avg_buy_price = data.get("avg_buy_price", 0.0)
+
                     current_price = self.stock_prices.get(code, 0.0)
                     value = current_price * amount
                     total_stock_value += value
+
+                    cost_basis = avg_buy_price * amount
+                    total_cost_basis += cost_basis
+
+                    profit_loss = value - cost_basis
+                    profit_loss_percent = (profit_loss / cost_basis * 100) if cost_basis != 0 else 0
+
                     stock_name = self.stocks_data.get(code, {}).get("name", "???")
                     report += f"  - 【{code}】{stock_name}\n"
                     report += f"    持有: {amount} 股\n"
+                    report += f"    均价: ${avg_buy_price:.2f}\n"  # 持仓均价
                     report += f"    市值: ${value:.2f} (@ ${current_price:.2f}/股)\n"
 
+                    # 显示盈亏
+                    if profit_loss > 0:
+                        report += f"    盈亏: 📈 +${profit_loss:.2f} (+{profit_loss_percent:.2f}%)\n"
+                    elif profit_loss < 0:
+                        report += f"    盈亏: 📉 -${abs(profit_loss):.2f} ({profit_loss_percent:.2f}%)\n"
+                    else:
+                        report += f"    盈亏: ➖ ${profit_loss:.2f} (0.00%)\n"
+
             total_assets = cash + total_stock_value
+            total_profit_loss = total_assets - (cash + total_cost_basis)  # 仅计算股票盈亏
+
             report += "\n------------------------\n"
-            report += f"💳 总资产 (现金+市值): ${total_assets:.2f}"
+            report += f"💳 总资产 (现金+市值): ${total_assets:.2f}\n"
+
+            # 显示总盈亏
+            if total_profit_loss > 0:
+                report += f"📈 总盈亏: +${total_profit_loss:.2f}"
+            elif total_profit_loss < 0:
+                report += f"📉 总盈亏: -${abs(total_profit_loss):.2f}"
+            else:
+                report += f"➖ 总盈亏: $0.00"
 
             yield event.plain_result(report)
 
@@ -679,8 +732,25 @@ class StockMarketPlugin(Star):
                 return
 
             portfolio["cash"] = cash - total_cost
+
+            # --- 修改持仓数据结构 ---
             current_holdings = portfolio.get("stocks", {})
-            current_holdings[code] = current_holdings.get(code, 0) + amount
+            stock_data = current_holdings.get(code, {"amount": 0, "avg_buy_price": 0.0})
+
+            current_amount = stock_data.get("amount", 0)
+            current_avg_price = stock_data.get("avg_buy_price", 0.0)
+
+            # 计算新的加权平均价
+            new_total_amount = current_amount + amount
+            new_total_cost = (current_avg_price * current_amount) + total_cost
+            new_avg_price = new_total_cost / new_total_amount
+
+            current_holdings[code] = {
+                "amount": new_total_amount,
+                "avg_buy_price": new_avg_price
+            }
+            # --- 修改结束 ---
+
             portfolio["stocks"] = current_holdings
 
             await self.save_user_portfolio(event, portfolio)
@@ -688,10 +758,12 @@ class StockMarketPlugin(Star):
             yield event.plain_result(
                 f"@{user_name} 交易成功！\n"
                 f"👍 **买入** {amount} 股 【{code}】\n"
-                f"均价: ${current_price:.2f}\n"
+                f"成交价: ${current_price:.2f}\n"
                 f"花费: ${total_cost:.2f}\n"
+                f"持仓均价: ${new_avg_price:.2f} (共 {new_total_amount} 股)\n"  # 显示新均价
                 f"剩余现金: ${portfolio['cash']:.2f}"
             )
+
 
     @stock_group.command("卖出")
     async def sell_stock(self, event: AstrMessageEvent, code: str, amount_str: str):
@@ -714,7 +786,17 @@ class StockMarketPlugin(Star):
 
         async with self.game_lock:
             current_holdings = portfolio.get("stocks", {})
-            held_amount = current_holdings.get(code, 0)
+
+            # --- 修改持仓数据结构 ---
+            stock_data = current_holdings.get(code)
+
+            if not stock_data:
+                yield event.plain_result(f"@{user_name} 您未持有 {code}。")
+                return
+
+            held_amount = stock_data.get("amount", 0)
+            avg_buy_price = stock_data.get("avg_buy_price", 0.0)
+            # --- 修改结束 ---
 
             if held_amount < amount:
                 yield event.plain_result(f"@{user_name} 持仓不足！您只有 {held_amount} 股 {code}。")
@@ -725,22 +807,39 @@ class StockMarketPlugin(Star):
                 yield event.plain_result(f"股票代码 {code} 异常，无法交易。")
                 return
 
-            total_profit = current_price * amount
+            # 卖出总收入
+            total_revenue = current_price * amount
+            # 卖出部分成本
+            cost_of_sold_shares = avg_buy_price * amount
+            # 本次卖出盈亏
+            sale_profit_loss = total_revenue - cost_of_sold_shares
 
-            portfolio["cash"] = portfolio.get("cash", 0.0) + total_profit
-            current_holdings[code] = held_amount - amount
+            portfolio["cash"] = portfolio.get("cash", 0.0) + total_revenue
 
-            if current_holdings[code] == 0:
+            # --- 修改持仓数据结构 ---
+            new_amount = held_amount - amount
+            if new_amount == 0:
                 del current_holdings[code]
+            else:
+                # 平均买入价不变，只更新数量
+                current_holdings[code]["amount"] = new_amount
+            # --- 修改结束 ---
 
             portfolio["stocks"] = current_holdings
 
             await self.save_user_portfolio(event, portfolio)
 
+            profit_loss_str = f"获利: ${sale_profit_loss:.2f}"
+            if sale_profit_loss < 0:
+                profit_loss_str = f"亏损: -${abs(sale_profit_loss):.2f}"
+            elif sale_profit_loss == 0:
+                profit_loss_str = f"盈亏: $0.00"
+
             yield event.plain_result(
                 f"@{user_name} 交易成功！\n"
                 f"👎 **卖出** {amount} 股 【{code}】\n"
-                f"均价: ${current_price:.2f}\n"
-                f"获利: ${total_profit:.2f}\n"
+                f"成交价: ${current_price:.2f}\n"
+                f"收入: ${total_revenue:.2f}\n"
+                f"({profit_loss_str})\n"  # 显示本次盈亏
                 f"剩余现金: ${portfolio['cash']:.2f}"
             )
