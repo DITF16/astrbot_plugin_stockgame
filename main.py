@@ -416,7 +416,7 @@ class StockMarketPlugin(Star):
                         holdings_data
                     )
 
-            # (自动 commit 在这里发生)
+                await db.commit()
 
         except Exception as e:
             # (自动 rollback 在这里发生)
