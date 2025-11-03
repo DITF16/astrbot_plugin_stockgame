@@ -217,19 +217,15 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         "stocks": stocks_to_render
     }
     try:
-        # 在 render_market_image 中使用如下 options：
         options = {
             "timeout": 10000,
-            # 请求服务器使用非 full-page 截图（避免捕获多余 viewport 区域）
-            "fullPage": False,
-            # 作为元信息说明我们期望的 CSS 宽度 / DPR —— 由服务器解析并在创建 context 或 clip 时合理使用
-            "meta": {"content_css_width": 640, "desired_dpr": 2}
+            "full_page": False,
         }
 
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
-            options=options
+            options=options  # 现在传递的是修正后的 options
         )
         return img_url
     except Exception as e:
