@@ -221,7 +221,7 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         options = {
             "timeout": 10000,
             # 请求服务器使用非 full-page 截图（避免捕获多余 viewport 区域）
-            "fullPage": False,
+            "full_page": False,
             # 作为元信息说明我们期望的 CSS 宽度 / DPR —— 由服务器解析并在创建 context 或 clip 时合理使用
             "meta": {"content_css_width": 640, "desired_dpr": 2}
         }
