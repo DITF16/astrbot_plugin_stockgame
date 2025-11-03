@@ -111,16 +111,26 @@ MARKET_HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        html, body {
+            margin: 0;
+            padding: 0;
             background-color: #ffffff;
             color: #212529;
-            padding: 15px;
-            width: 600px; /* 固定宽度，适合截图 */
-            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
+    
+        #root {
+            width: 640px;      /* <- 可调整为 600 / 640 等：决定 CSS 宽度 */
+            box-sizing: border-box;
+            margin: 0 auto;
+            padding: 12px;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+    
         .header { font-size: 24px; font-weight: 600; margin-bottom: 15px; }
-
+        
         /* 市场气候 */
         .climate-section { margin-bottom: 20px; }
         .climate-header { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
@@ -208,10 +218,16 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
     }
     try:
         # 我们需要从 Star 实例中调用 html_render
+        options = {
+            "timeout": 10000,
+            "viewport": {"width": 640, "height": 1200},
+            "deviceScaleFactor": 2,
+            "fullPage": False
+        }
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
-            options={"timeout": 10000}
+            options=options
         )
         return img_url
     except Exception as e:
