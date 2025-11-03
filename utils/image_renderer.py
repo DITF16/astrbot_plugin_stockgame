@@ -217,13 +217,15 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         "stocks": stocks_to_render
     }
     try:
-        # 我们需要从 Star 实例中调用 html_render
+        # 在 render_market_image 中使用如下 options：
         options = {
             "timeout": 10000,
-            "viewport": {"width": 640, "height": 1200},
-            "deviceScaleFactor": 2,
-            "fullPage": False
+            # 请求服务器使用非 full-page 截图（避免捕获多余 viewport 区域）
+            "fullPage": False,
+            # 作为元信息说明我们期望的 CSS 宽度 / DPR —— 由服务器解析并在创建 context 或 clip 时合理使用
+            "meta": {"content_css_width": 640, "desired_dpr": 2}
         }
+
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
