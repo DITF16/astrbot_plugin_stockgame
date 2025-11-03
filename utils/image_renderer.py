@@ -225,7 +225,7 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
         img_url = await star_instance.html_render(
             MARKET_HTML_TEMPLATE,
             render_data,
-            options=options  # 现在传递的是修正后的 options
+            options=options
         )
         return img_url
     except Exception as e:
