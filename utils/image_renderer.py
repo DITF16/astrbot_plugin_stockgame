@@ -219,8 +219,8 @@ async def render_market_image(star_instance: Star, climate_events: List[Dict], s
     try:
         options = {
             "timeout": 10000,
-            "viewport": {"width": 640, "height": 1200},
-            "full_page": False,
+            # "viewport": {"width": 640, "height": 1200},
+            "full_page": True,
         }
 
         img_url = await star_instance.html_render(
