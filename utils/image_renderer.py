@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from pathlib import Path
 from typing import Dict, List
+import concurrent.futures
 from astrbot.api import logger
 from astrbot.api.star import Star
 from astrbot.core.star import StarTools
@@ -24,22 +25,22 @@ except Exception as e:
 # 设置 matplotlib 使用 'Agg' 后端
 matplotlib.use('Agg')
 
-# (重大修改) 强制加载和注册 `resources` 目录下的所有中文字体
+# 强制加载和注册 `resources` 目录下的所有中文字体
 try:
     # 解决负号显示问题
     plt.rcParams['axes.unicode_minus'] = False
 
-    # 1. 确保字体文件夹存在
+    # 确保字体文件夹存在
     if not RESOURCES_DIR.exists():
         RESOURCES_DIR.mkdir(parents=True)
         logger.warning(f"插件 'resources' 目录未找到，已自动创建: {RESOURCES_DIR}")
 
-    # 2. 准备一个列表，存放所有我们成功注册的字体名称
+    # 准备一个列表，存放所有我们成功注册的字体名称
     # 我们将优先使用插件自带的字体
     font_names_to_register = []
 
-    # 3. (关键) 遍历 resources 目录下的所有 .ttf 和 .otf 字体文件
-    font_files = list(RESOURCES_DIR.glob("*.ttf")) + list(RESOURCES_DIR.glob("*.otf")) + list(RESOURCES_DIR.glob("*.ttc"))
+    font_files = list(RESOURCES_DIR.glob("*.ttf")) + list(RESOURCES_DIR.glob("*.otf")) + list(
+        RESOURCES_DIR.glob("*.ttc"))
 
     if not font_files:
         logger.warning(f"未在 {RESOURCES_DIR} 中找到任何字体文件。将依赖系统字体。")
@@ -352,8 +353,12 @@ async def render_stock_detail_image_matplotlib(star_instance: Star, render_data:
         temp_file_name = f"stock_{stock_code.replace('.', '_')}_{int(time.time() * 1000)}.png"
         temp_file_path = TEMP_DIR / temp_file_name
 
-        # 使用 bbox_inches='tight' 来裁剪空白边缘
-        plt.savefig(temp_file_path, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+        loop = asyncio.get_running_loop()
+
+        await loop.run_in_executor(
+            None,
+            lambda: plt.savefig(temp_file_path, format='png', bbox_inches='tight', facecolor=fig.get_facecolor())
+        )
 
         # 异步清理旧的临时图片
         asyncio.create_task(cleanup_temp_files(TEMP_DIR, keep_latest=5))
