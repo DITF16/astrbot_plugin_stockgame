@@ -489,7 +489,6 @@ class StockMarketPlugin(Star):
 
 /炒股 开户
   - 加入游戏，获取启动资金。
-  - (注意: 开户不再自动开启推送)
 
 /炒股 全球局势
   - 查看当前影响市场的“全球事件”。
@@ -512,6 +511,9 @@ class StockMarketPlugin(Star):
 
 /炒股 卖出 [股票代码] [数量]
   - 示例: /炒股 卖出 QLAI 10
+
+/炒股 全部卖出
+  - 卖出你的所有类型股票
 """
         yield event.plain_result(menu)
 
