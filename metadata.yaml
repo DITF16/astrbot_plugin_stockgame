@@ -1,6 +1,6 @@
 name: astrbot_plugin_stockgame
 display_name: 模拟炒股游戏
 desc: 一个在群聊中玩的模拟炒股游戏
-version: v1.0.0
+version: v1.0.1
 author: DITF16
 repo: https://github.com/DITF16/astrbot_plugin_stockgame
