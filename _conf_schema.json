@@ -27,6 +27,11 @@
     "default": 0.02,
     "hint": "已调低基础波动，使事件驱动更明显"
   },
+  "mean_reversion_strength": {
+    "description": "股价回归强度 (例如 0.005 代表 0.5%)",
+    "type": "float",
+    "default": 0.005
+  },
   "enable_news_push": {
     "description": "是否在新事件发生或旧事件过期时主动推送新闻",
     "type": "bool",

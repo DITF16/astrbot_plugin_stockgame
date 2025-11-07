@@ -256,17 +256,25 @@ class StockMarketPlugin(Star):
         """
         计算单只股票的新价格
         """
+        # 基础随机波动
         base_volatility = self.config.get("base_volatility", 0.03)
         base_drift = random.uniform(-base_volatility, base_volatility)
 
-        total_trend_impact = 0.0
+        # 全球事件趋势取平均值，以防止极端复利
+        trend_impacts = []
         for event in g_events_list:
             affected_industries = event.get("affected_industries", [])
             affected_tags = event.get("affected_tags", [])
             if (stock_data.get("industry") in affected_industries or
                     any(tag in stock_data.get("tags", []) for tag in affected_tags)):
-                total_trend_impact += event.get("trend_impact", 0.0)
+                trend_impacts.append(event.get("trend_impact", 0.0))
 
+        total_trend_impact = 0.0
+        if trend_impacts:
+            # 取平均值，而不是总和
+            total_trend_impact = sum(trend_impacts) / len(trend_impacts)
+
+        # 局部事件冲击
         direct_impact = 0.0
         if l_event:
             affected_codes = l_event.get("affected_codes", [])
@@ -275,10 +283,29 @@ class StockMarketPlugin(Star):
                     any(tag in stock_data.get("tags", []) for tag in affected_tags)):
                 direct_impact = l_event.get("direct_impact_percent", 0.0)
 
-        total_drift = base_drift + total_trend_impact
-        new_price = current_price * (1 + total_drift)
-        new_price = new_price * (1 + direct_impact)
+        clamped_direct_impact = max(-0.5, min(direct_impact, 1.0))
 
+        # 价格计算 (引入均值回归)
+
+        # A. 应用趋势和波动 (乘法)
+        total_drift = base_drift + total_trend_impact
+        price_after_drift = current_price * (1 + total_drift)
+
+        # B. 应用均值回归 (加法)
+        reversion_strength = self.config.get("mean_reversion_strength", 0.005)
+        # 股票的“基准价”
+        fundamental_value = stock_data.get("initial_price", 100.0)
+
+        # 计算 (基准价 - 当前价) * 强度，得出一个“拉力”
+        reversion_pull = (fundamental_value - price_after_drift) * reversion_strength
+
+        # 应用拉力
+        price_after_reversion = price_after_drift + reversion_pull
+
+        # C. 应用一次性的局部事件冲击 (乘法)
+        new_price = price_after_reversion * (1 + clamped_direct_impact)  # 使用钳制后的值
+
+        # 保证价格不低于 0.01
         return max(0.01, new_price)
 
     async def push_news_to_groups(self, news: str):
