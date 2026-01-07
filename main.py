@@ -311,12 +311,13 @@ class StockMarketPlugin(Star):
     async def push_news_to_groups(self, news: str):
         """
         向所有已加入游戏的群组推送新闻。
+        若发现机器人已不在群组中，则自动关闭该群的推送。
         """
-        # 从配置中读取UMO前缀
         umo_prefix = self.config.get("umo_group_prefix", "NapCat:GroupMessage")
-
         logger.info(f"推送新闻到 {len(self.playing_groups)} 个群组...")
-        for group_id in self.playing_groups:
+        groups_to_check = list(self.playing_groups)
+
+        for group_id in groups_to_check:
             try:
                 # 使用配置的前缀
                 umo = f"{umo_prefix}:{group_id}"
@@ -324,7 +325,13 @@ class StockMarketPlugin(Star):
                 await self.context.send_message(umo, MessageChain().message(news))
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logger.error(f"!!! 推送新闻到群 {group_id} 失败: {e}", exc_info=True)
+                error_msg = str(e)
+                # 检查是否是因为被踢出群组导致的失败 (错误码 110 或相关提示)
+                if "110" in error_msg or "被移出该群" in error_msg:
+                    logger.warning(f"检测到机器人已不在群组 {group_id}，正在移除该群推送记录。")
+                    await self.disable_push_in_group(group_id)
+                else:
+                    logger.error(f"!!! 推送新闻到群 {group_id} 失败: {e}", exc_info=True)
 
     async def load_json_data(self, file_path: Path, default: Any = None) -> Any:
         try:
